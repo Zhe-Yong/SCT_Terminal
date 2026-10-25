@@ -1,0 +1,77 @@
+{
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "C/C++: Build SCT x64 release",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\tools\\build-release.ps1",
+                "-Arch",
+                "x64",
+                "-Zip"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Build 64-bit SCT into release, bundle NSudo runtimes, and create SCT_x64.zip."
+        },
+        {
+            "type": "shell",
+            "label": "C/C++: Build SCT x86 release",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\tools\\build-release.ps1",
+                "-Arch",
+                "x86",
+                "-Zip"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build",
+            "detail": "Build 32-bit SCT into release, bundle NSudo runtimes, and create SCT_x86.zip. Requires the MSYS2 mingw32 toolchain."
+        },
+        {
+            "type": "shell",
+            "label": "C/C++: Build SCT x64 + x86 release",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\tools\\build-release.ps1",
+                "-Arch",
+                "all",
+                "-Zip"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build",
+            "detail": "Build both architectures into release and create SCT_all.zip."
+        }
+    ],
+    "version": "2.0.0"
+}

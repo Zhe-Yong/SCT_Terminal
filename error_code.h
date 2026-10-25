@@ -1,0 +1,18 @@
+/* Error Codes */
+/* Copyright (c) 2026 ZheYong. All rights reserved. */
+/* File Version: 0.0.1 */
+#pragma once
+
+#define ERR_NONE 0x0000
+#define ERR_UNKNOWN 0x0001
+#define ERR_EXPIRED 0x0002
+#define ERR_INVALID_COMMAND 0x0003
+#define ERR_PERMISSION_DENIED 0x0004
+#define ERR_FILE_NOT_FOUND 0x0005
+#define ERR_OUT_OF_MEMORY 0x0006
+#define ERR_SELFCHECK_FAILED 0x0007
+#define ERR_TOO_MANY_ARGUMENTS 0x0008
+#define ERR_AUTH_FAILED 0x0009
+#define ERR_TOO_FEW_ARGUMENTS 0x000A
+#define ERR_INVALID_OPTION 0x000B
+#define ERR_DUPLICATE_OPTION 0x000C

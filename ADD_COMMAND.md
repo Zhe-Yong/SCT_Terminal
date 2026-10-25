@@ -15,7 +15,8 @@ SuperCmdToolkit/
 │   ├── whoami.cpp
 │   └── sudo.cpp
 ├── global.h              集中包含系统头文件和项目头文件
-├── build-release.ps1     自动编译根目录和 commands/ 下的 .cpp
+├── tools/
+│   └── build-release.ps1 自动编译根目录和 commands/ 下的 .cpp
 └── ADD_COMMAND.md        本说明
 ```
 
@@ -78,7 +79,7 @@ static const CommandRegistration register_echo_command(
 ### 2.5 构建和测试
 
 ```powershell
-.\build-release.ps1 -Arch x64 -Zip
+.\tools\build-release.ps1 -Arch x64 -Zip
 ```
 
 快速测试：
@@ -313,20 +314,20 @@ sudo <command>
 - 不要直接使用 `std::cout`，使用 `context.out`。
 - 命令名和处理函数名使用小写或下划线风格。
 - 新增项目头文件时，按当前集中包含约定加入 `global.h`。
-- 新命令文件不需要加入构建脚本，`build-release.ps1` 会自动收集 `commands/*.cpp`。
+- 新命令文件不需要加入构建脚本，`tools/build-release.ps1` 会自动收集 `commands/*.cpp`。
 
 ## 11. 构建说明
 
 x64：
 
 ```powershell
-.\build-release.ps1 -Arch x64 -Zip
+.\tools\build-release.ps1 -Arch x64 -Zip
 ```
 
 x86：
 
 ```powershell
-.\build-release.ps1 -Arch x86 -Zip
+.\tools\build-release.ps1 -Arch x86 -Zip
 ```
 
 x86 需要安装 MSYS2 mingw32 工具链：

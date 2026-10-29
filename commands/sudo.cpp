@@ -52,6 +52,7 @@ static int handle_sudo(CommandContext& context) {
 
         std::string error;
         if (!elevated_session().start(mode, error)) {
+            if (error == "Command cancelled.") return ERR_CANCELLED;
             print(context.out, "Failed to start elevated session: " + error + "\n",
                   CLR_BrightRed);
             return ERR_PERMISSION_DENIED;
@@ -95,6 +96,7 @@ static int handle_sudo(CommandContext& context) {
     ElevatedResponse response;
     std::string error;
     if (!elevated_session().run_once(command_line, response, error)) {
+        if (error == "Command cancelled.") return ERR_CANCELLED;
         print(context.out, "Failed to run elevated command: " + error + "\n",
               CLR_BrightRed);
         return ERR_PERMISSION_DENIED;

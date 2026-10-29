@@ -79,7 +79,8 @@ namespace clr_detail {
 }
 
 // ============ 设置颜色（不重置、不输出文字）============
-inline void color_set(int fg = CLR_NONE,
+inline void color_set(std::ostream& os,
+                      int fg = CLR_NONE,
                       int bg = CLR_NONE,
                       int style = CLR_NONE) {
     if (fg    != CLR_NONE) clr_detail::cur_fg    = fg;
@@ -87,7 +88,13 @@ inline void color_set(int fg = CLR_NONE,
     if (style != CLR_NONE) clr_detail::cur_style = style;
 
     std::string code = clr_detail::current_code();
-    if (!code.empty()) std::cout << code;
+    if (!code.empty()) os << code;
+}
+
+inline void color_set(int fg = CLR_NONE,
+                      int bg = CLR_NONE,
+                      int style = CLR_NONE) {
+    color_set(std::cout, fg, bg, style);
 }
 
 // ============ 彻底重置：清视觉 + 清数据 ============

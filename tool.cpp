@@ -100,6 +100,13 @@ std::string get_module_path() {
     return wide_to_utf8(std::wstring(buffer.data(), length));
 }
 
+std::string get_module_directory() {
+    std::string path = get_module_path();
+    if (path.empty()) return {};
+    size_t separator = path.find_last_of("\\/");
+    return separator == std::string::npos ? "." : path.substr(0, separator);
+}
+
 std::string get_current_user_name() {
     wchar_t buffer[256];
     DWORD size = (DWORD)std::size(buffer);
@@ -140,7 +147,9 @@ std::vector<std::string> get_command_line_args() {
     return result;
 }
 
-bool read_line_utf8(std::string& line) {
+ReadLineResult read_line_utf8(std::string& line) {
+    if (terminal_gui_active()) return terminal().read_line(line);
+
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     DWORD mode = 0;
     if (input != INVALID_HANDLE_VALUE && GetConsoleMode(input, &mode)) {
@@ -148,10 +157,19 @@ bool read_line_utf8(std::string& line) {
         wchar_t buffer[256];
         while (true) {
             DWORD read = 0;
-            if (!ReadConsoleW(input, buffer, (DWORD)std::size(buffer), &read, nullptr)) {
-                return false;
+            if (!ReadConsoleW(input, buffer, (DWORD)std::size(buffer), &read,
+                              nullptr)) {
+                line.clear();
+                DWORD error = GetLastError();
+                if (error == ERROR_INVALID_HANDLE) {
+                    return ReadLineResult::Error;
+                }
+                return ReadLineResult::Interrupted;
             }
-            if (read == 0) return false;
+            if (read == 0) {
+                line.clear();
+                return ReadLineResult::EndOfFile;
+            }
             wide_line.append(buffer, read);
             if (wide_line.back() == L'\n') {
                 wide_line.pop_back();
@@ -162,11 +180,50 @@ bool read_line_utf8(std::string& line) {
             }
         }
         line = wide_to_utf8(wide_line);
-        return true;
+        return ReadLineResult::Line;
     }
-    if (!std::getline(std::cin, line)) return false;
+    if (!std::getline(std::cin, line)) {
+        line.clear();
+        return ReadLineResult::EndOfFile;
+    }
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    return true;
+    return ReadLineResult::Line;
+}
+
+void ensure_console_attached() {
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    bool has_output = output && output != INVALID_HANDLE_VALUE;
+    bool has_input = input && input != INVALID_HANDLE_VALUE;
+    if (has_output || has_input) return;
+
+    if (!AttachConsole(ATTACH_PARENT_PROCESS) && !AllocConsole()) return;
+
+    HANDLE conout = CreateFileW(
+        L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
+        nullptr);
+    if (conout != INVALID_HANDLE_VALUE) {
+        SetStdHandle(STD_OUTPUT_HANDLE, conout);
+        SetStdHandle(STD_ERROR_HANDLE, conout);
+    }
+
+    HANDLE conin = CreateFileW(
+        L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
+        nullptr);
+    if (conin != INVALID_HANDLE_VALUE) {
+        SetStdHandle(STD_INPUT_HANDLE, conin);
+    }
+
+    FILE* stream = nullptr;
+    stream = std::freopen("CONOUT$", "w", stdout);
+    stream = std::freopen("CONOUT$", "w", stderr);
+    stream = std::freopen("CONIN$", "r", stdin);
+    (void)stream;
+    std::cout.clear();
+    std::cerr.clear();
+    std::cin.clear();
 }
 
 void setup_console() {
@@ -180,5 +237,13 @@ void setup_console() {
     if (output != INVALID_HANDLE_VALUE && GetConsoleMode(output, &mode)) {
         SetConsoleMode(output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
-    SetConsoleTitleW(L"SuperCommandShell");
+
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD input_mode = 0;
+    if (input != INVALID_HANDLE_VALUE &&
+        GetConsoleMode(input, &input_mode)) {
+        SetConsoleMode(input, input_mode | ENABLE_PROCESSED_INPUT);
+    }
+
+    SetConsoleTitleW(L"SuperCommandTerminal");
 }

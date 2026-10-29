@@ -13,9 +13,18 @@ std::wstring quote_wide_arg(const std::wstring& arg);
 std::string get_current_directory();
 bool set_current_directory(const std::string& path);
 std::string get_module_path();
+std::string get_module_directory();
 std::string get_current_user_name();
 std::string format_win32_error(DWORD code);
 
+enum class ReadLineResult {
+    Line,
+    Interrupted,
+    EndOfFile,
+    Error
+};
+
 std::vector<std::string> get_command_line_args();
-bool read_line_utf8(std::string& line);
+ReadLineResult read_line_utf8(std::string& line);
+void ensure_console_attached();
 void setup_console();

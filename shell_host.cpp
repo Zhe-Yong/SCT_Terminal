@@ -8,12 +8,23 @@ enum class ShellAction {
 };
 
 static void dispatch_elevated(const string& line) {
+    CommandExecutionGuard guard;
+    if (command_cancelled()) {
+        print("Command cancelled.\n", CLR_BrightYellow);
+        print_rst();
+        return;
+    }
+
     ElevatedResponse response;
     string error;
     if (!elevated_session().send(line, response, error)) {
-        print("Elevated command failed: " + error + "\n", CLR_BrightRed);
+        if (error == "Command cancelled.") {
+            print("Command cancelled.\n", CLR_BrightYellow);
+        } else {
+            print("Elevated command failed: " + error + "\n", CLR_BrightRed);
+            elevated_session().stop(true);
+        }
         print_rst();
-        elevated_session().stop(true);
         return;
     }
 
@@ -109,11 +120,38 @@ void run_shell() {
         print_prompt();
 
         string line;
-        if (!read_line_utf8(line)) {
-            cout << "\n";
-            break;
+        ReadLineResult result = read_line_utf8(line);
+
+        if (result == ReadLineResult::Line) {
+            if (consume_prompt_interrupt()) {
+                clear_command_cancel();
+                cout << "\n";
+                print_rst();
+                continue;
+            }
+            clear_command_cancel();
+            if (process_line(line) == ShellAction::Exit) break;
+            continue;
         }
 
-        if (process_line(line) == ShellAction::Exit) break;
+        if (result == ReadLineResult::Interrupted) {
+            Sleep(50);
+            consume_prompt_interrupt();
+            clear_command_cancel();
+            cout << "\n";
+            print_rst();
+            continue;
+        }
+
+        Sleep(50);
+        if (consume_prompt_interrupt() || command_cancelled()) {
+            clear_command_cancel();
+            cout << "\n";
+            print_rst();
+            continue;
+        }
+
+        cout << "\n";
+        break;
     }
 }

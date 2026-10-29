@@ -112,7 +112,7 @@ static bool verify_pipe_server(HANDLE pipe, DWORD expected_pid) {
     return static_cast<DWORD>(server_pid) == expected_pid;
 }
 
-static std::wstring get_process_user_sid();
+std::wstring get_process_user_sid();
 
 static DWORD get_process_parent_pid(DWORD process_id) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -439,7 +439,7 @@ bool is_process_elevated() {
     return ok && elevation.TokenIsElevated != 0;
 }
 
-static std::wstring get_process_user_sid() {
+std::wstring get_process_user_sid() {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
         return {};
@@ -548,6 +548,17 @@ ElevatedSession::~ElevatedSession() {
 bool ElevatedSession::start(ElevationMode mode, std::string& error) {
     if (active_) return true;
 
+    if (command_cancelled()) {
+        error = "Command cancelled.";
+        return false;
+    }
+
+    std::string cancel_name = command_cancellation_event_name();
+    if (cancel_name.empty()) {
+        error = "Command cancellation is not initialized.";
+        return false;
+    }
+
     PrivilegeLevel current_level = get_process_privilege_level();
     PrivilegeLevel target_level = elevation_mode_level(mode);
     if (current_level >= target_level) {
@@ -612,7 +623,8 @@ bool ElevatedSession::start(ElevationMode mode, std::string& error) {
         quote_wide_arg(cmd_name) + L" " +
         quote_wide_arg(out_name) + L" " +
         quote_wide_arg(cwd_wide) + L" " +
-        std::to_wstring(GetCurrentProcessId());
+        std::to_wstring(GetCurrentProcessId()) + L" " +
+        quote_wide_arg(utf8_to_wide(cancel_name));
 
     HANDLE launched_process = nullptr;
 
@@ -684,6 +696,10 @@ bool ElevatedSession::start(ElevationMode mode, std::string& error) {
         return fail(message);
     }
 
+    if (command_cancelled()) {
+        return fail("Command cancelled.");
+    }
+
     if (mode == ElevationMode::Administrator) {
         DWORD helper_pid = GetProcessId(launched_process);
         if (helper_pid == 0 ||
@@ -738,6 +754,10 @@ bool ElevatedSession::start(ElevationMode mode, std::string& error) {
                     std::string(privilege_level_name(target_level)) + ").");
     }
 
+    if (command_cancelled()) {
+        return fail("Command cancelled.");
+    }
+
     cmd_pipe_ = cmd_pipe;
     out_pipe_ = out_pipe;
     process_ = launched_process;
@@ -764,6 +784,11 @@ bool ElevatedSession::send(const std::string& command_line,
                            std::string& error) {
     if (!active_) {
         error = "No elevated session is active.";
+        return false;
+    }
+
+    if (command_cancelled()) {
+        error = "Command cancelled.";
         return false;
     }
 

@@ -14,6 +14,7 @@ enum class ElevationMode {
 };
 
 bool is_process_elevated();
+std::wstring get_process_user_sid();
 PrivilegeLevel get_process_privilege_level();
 const char* privilege_level_name(PrivilegeLevel level);
 char privilege_level_tag(PrivilegeLevel level);

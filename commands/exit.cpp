@@ -6,4 +6,4 @@ static int handle_exit(CommandContext& context) {
 }
 
 static const CommandRegistration register_exit_command(
-    "exit", "Exit SuperCommandShell.", CommandSchema{}, handle_exit);
+    "exit", "Exit SuperCommandTerminal.", CommandSchema{}, handle_exit);

@@ -1,2 +1,8 @@
 # Root-level build outputs (one executable per root .cpp)
 /*.exe
+
+# Debug build output
+/build/
+
+# Not official release build output
+/release/

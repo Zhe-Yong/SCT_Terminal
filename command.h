@@ -44,6 +44,11 @@ private:
     std::vector<std::string> positionals_;
 };
 
+enum class CommandOrigin {
+    Interactive,
+    Autoexec
+};
+
 struct CommandContext {
     explicit CommandContext(std::ostream& output) : out(output) {}
 
@@ -51,6 +56,7 @@ struct CommandContext {
     bool exit_requested = false;
     std::string raw_line;
     CommandArguments args;
+    CommandOrigin origin = CommandOrigin::Interactive;
 };
 
 using CommandHandler = std::function<int(CommandContext&)>;
@@ -60,6 +66,8 @@ struct Command {
     std::string description;
     CommandSchema schema;
     CommandHandler handler;
+    int require_elevation = 0;
+    std::string owner;
 };
 
 class CommandRegistry {
@@ -67,7 +75,16 @@ public:
     void add(const std::string& name,
              const std::string& description,
              CommandSchema schema,
-             CommandHandler handler);
+             CommandHandler handler,
+             int require_elevation = 0);
+    bool try_add(const std::string& name,
+                 const std::string& description,
+                 CommandSchema schema,
+                 CommandHandler handler,
+                 int require_elevation,
+                 const std::string& owner,
+                 std::string& error);
+    void remove_owner(const std::string& owner);
     const Command* find(const std::string& name) const;
     std::vector<const Command*> list() const;
 
@@ -80,7 +97,8 @@ public:
     CommandRegistration(const std::string& name,
                         const std::string& description,
                         CommandSchema schema,
-                        CommandHandler handler);
+                        CommandHandler handler,
+                        int require_elevation = 0);
 };
 
 std::string lower_ascii(const std::string& text);

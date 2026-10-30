@@ -6,3 +6,5 @@
 
 # Not official release build output
 /release/
+
+/.vscode

@@ -1,10 +1,12 @@
 #include "global.h"
+#include <winver.h>
 
 namespace {
 
 struct PluginRecord {
     std::wstring path;
     std::string file_name;
+    std::string dll_ver;
     std::string sha256;
     PluginSignatureInfo signature;
     bool enabled = false;
@@ -69,6 +71,64 @@ std::vector<std::wstring> list_plugin_files(const std::wstring& directory) {
     FindClose(find);
     std::sort(result.begin(), result.end());
     return result;
+}
+
+bool read_file_version(const std::wstring& path,
+                       std::string& version,
+                       std::string& error) {
+    DWORD handle = 0;
+    DWORD size = GetFileVersionInfoSizeW(path.c_str(), &handle);
+    if (size == 0) {
+        DWORD code = GetLastError();
+        error = code == ERROR_SUCCESS ? "FileVersion is unavailable."
+                                      : format_win32_error(code);
+        return false;
+    }
+
+    std::vector<BYTE> data(size);
+    if (!GetFileVersionInfoW(path.c_str(), handle, size, data.data())) {
+        error = format_win32_error(GetLastError());
+        return false;
+    }
+
+    struct Translation {
+        WORD language;
+        WORD code_page;
+    };
+
+    Translation* translations = nullptr;
+    UINT translation_size = 0;
+    if (!VerQueryValueW(data.data(), L"\\VarFileInfo\\Translation",
+                        reinterpret_cast<void**>(&translations),
+                        &translation_size) ||
+        translation_size < sizeof(Translation)) {
+        error = "Version translation is unavailable.";
+        return false;
+    }
+
+    size_t count = translation_size / sizeof(Translation);
+    for (size_t index = 0; index < count; ++index) {
+        wchar_t sub_block[128] = {};
+        swprintf(sub_block, std::size(sub_block),
+                 L"\\StringFileInfo\\%04x%04x\\FileVersion",
+                 translations[index].language, translations[index].code_page);
+
+        wchar_t* value = nullptr;
+        UINT value_size = 0;
+        if (!VerQueryValueW(data.data(), sub_block,
+                            reinterpret_cast<void**>(&value), &value_size) ||
+            !value || value_size == 0) {
+            continue;
+        }
+
+        size_t length = value_size;
+        while (length > 0 && value[length - 1] == L'\0') --length;
+        version = wide_to_utf8(std::wstring(value, length));
+        if (!version.empty()) return true;
+    }
+
+    error = "FileVersion is unavailable.";
+    return false;
 }
 
 FARPROC get_plugin_export(HMODULE module, const char* name) {
@@ -221,6 +281,8 @@ struct PluginManager::Impl {
             separator == std::wstring::npos ? path : path.substr(separator + 1));
 
         std::string error;
+        std::string version_error;
+        read_file_version(path, record->dll_ver, version_error);
         if (!compute_file_sha256(path, record->sha256, error)) {
             record->error = error;
             return record;
@@ -261,6 +323,13 @@ struct PluginManager::Impl {
             FreeLibrary(module);
             error = record->file_name + " uses an unsupported plugin ABI.";
             return false;
+        }
+
+        auto dll_version = get_typed_plugin_export<SctPluginDllVersionFn>(
+            module, "sct_plugin_dll_ver");
+        if (dll_version) {
+            const char* value = dll_version();
+            if (value && value[0] != '\0') record->dll_ver = value;
         }
 
         record->api = &api;
@@ -513,6 +582,55 @@ bool PluginManager::disable(const std::string& sha256, std::string& error) {
     return true;
 }
 
+bool PluginManager::dll_version(const std::string& file_name,
+                                std::string& version,
+                                std::string& error) const {
+    std::string target = file_name;
+    size_t separator = target.find_last_of("\\/");
+    if (separator != std::string::npos) target = target.substr(separator + 1);
+    if (target.empty()) {
+        error = "DLL name is empty.";
+        return false;
+    }
+
+    std::string lower_target = lower_ascii(target);
+    if (lower_target.size() < 4 ||
+        lower_target.compare(lower_target.size() - 4, 4, ".dll") != 0) {
+        target += ".dll";
+        lower_target += ".dll";
+    }
+
+    for (const std::string& hash : impl_->order) {
+        auto it = impl_->records.find(hash);
+        if (it == impl_->records.end()) continue;
+        if (lower_ascii(it->second->file_name) != lower_target) continue;
+        if (it->second->dll_ver.empty()) {
+            error = it->second->file_name + " does not report dll_ver.";
+            return false;
+        }
+        version = it->second->dll_ver;
+        return true;
+    }
+
+    for (const std::wstring& path : list_plugin_files(impl_->plugin_directory)) {
+        size_t path_separator = path.find_last_of(L"\\/");
+        std::wstring name = path_separator == std::wstring::npos
+                                ? path
+                                : path.substr(path_separator + 1);
+        if (lower_ascii(wide_to_utf8(name)) != lower_target) continue;
+
+        std::string ignored;
+        if (!read_file_version(path, version, ignored) || version.empty()) {
+            error = target + " does not provide dll_ver.";
+            return false;
+        }
+        return true;
+    }
+
+    error = "Plugin DLL not found: " + target;
+    return false;
+}
+
 std::vector<PluginInfo> PluginManager::list() const {
     std::vector<PluginInfo> result;
     for (const std::string& hash : impl_->order) {
@@ -521,6 +639,7 @@ std::vector<PluginInfo> PluginManager::list() const {
         const PluginRecord& record = *it->second;
         PluginInfo info;
         info.file_name = record.file_name;
+        info.dll_ver = record.dll_ver;
         info.sha256 = record.sha256;
         info.signer_subject = record.signature.signer_subject;
         info.signer_spki_sha256 = record.signature.signer_spki_sha256;

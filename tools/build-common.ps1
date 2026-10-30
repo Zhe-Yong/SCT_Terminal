@@ -40,6 +40,79 @@ function Invoke-BuildCompiler {
     }
 }
 
+function Get-Crc32Hex {
+    param([byte[]]$Bytes)
+
+    [uint32]$crc = [uint32]::MaxValue
+    [uint32]$polynomial = [Convert]::ToUInt32('EDB88320', 16)
+    foreach ($value in $Bytes) {
+        $crc = [uint32]($crc -bxor [uint32]$value)
+        for ($bit = 0; $bit -lt 8; $bit++) {
+            if (($crc -band [uint32]1) -ne 0) {
+                $crc = [uint32](($crc -shr 1) -bxor $polynomial)
+            } else {
+                $crc = [uint32]($crc -shr 1)
+            }
+        }
+    }
+    $crc = [uint32]($crc -bxor [uint32]::MaxValue)
+    return ('{0:X8}' -f $crc)
+}
+
+function Get-ProjectBuildId {
+    param([string]$Root)
+
+    $extensions = @(
+        '.c', '.cc', '.cpp', '.cxx',
+        '.h', '.hh', '.hpp', '.hxx',
+        '.rc', '.def', '.asm'
+    )
+    $excluded = @('.git', 'build', 'release', 'NSudo')
+
+    $paths = @(
+        Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object {
+            $relative = $_.FullName.Substring($Root.Length).TrimStart('\', '/')
+            $skip = $false
+            foreach ($segment in ($relative -split '[\\/]')) {
+                if ($excluded -contains $segment) {
+                    $skip = $true
+                    break
+                }
+            }
+            (-not $skip) -and ($extensions -contains $_.Extension.ToLowerInvariant())
+        } | ForEach-Object { $_.FullName }
+    )
+
+    if ($paths.Count -eq 0) {
+        return '00000000'
+    }
+
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $stream = New-Object System.IO.MemoryStream
+    try {
+        foreach ($path in $paths) {
+            $relative = $path.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+            $nameBytes = [Text.Encoding]::UTF8.GetBytes($relative)
+            $stream.Write($nameBytes, 0, $nameBytes.Length)
+            $stream.WriteByte(0)
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.WriteByte(0)
+        }
+
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = $sha256.ComputeHash($stream.ToArray())
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+
+    return Get-Crc32Hex -Bytes $digest
+}
+
 function Get-ProjectSourceFiles {
     param([string]$Root)
 

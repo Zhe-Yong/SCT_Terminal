@@ -38,33 +38,28 @@ static int run_ppl_mode(const vector<string>& args) {
     return 1;
 }
 
-static int run_helper_mode(const vector<string>& args) {
-    if (args.size() < 7) return 1;
-
-    DWORD parent_pid = 0;
-    try {
-        unsigned long long value = std::stoull(args[5]);
-        if (value == 0 || value > 0xFFFFFFFFull) return 1;
-        parent_pid = static_cast<DWORD>(value);
-    } catch (...) {
-        return 1;
+static std::string startup_value(const vector<string>& args,
+                                 const std::string& name) {
+    for (size_t index = 1; index + 1 < args.size(); ++index) {
+        if (lower_ascii(args[index]) == name) {
+            return args[index + 1];
+        }
     }
-
-    std::string error;
-    if (!open_command_cancellation_event(args[6], error)) return 1;
-
-    std::string plugin_error;
-    plugin_manager().initialize(get_module_directory(), plugin_error, false);
-
-    ppl_set_target_pid(parent_pid);
-    return run_elevated_helper(args[2], args[3], args[4], parent_pid);
+    return {};
 }
 
 static void print_welcome() {
-    print("==========================================\n"
-          "|  SuperCommandTerminal  V0.0.1-Preview  |\n"
-          "|  Developed by ZheYong                  |\n"
-          "==========================================\n",
+    std::string title = "SuperCommandTerminal  " + std::string(SCT_DISPLAY_VERSION);
+    std::string author = "Developed by ZheYong";
+    size_t content_width = std::max(title.size(), author.size());
+    std::string border(content_width + 6, '=');
+
+    auto line = [content_width](const std::string& text) {
+        return "|  " + text + std::string(content_width - text.size(), ' ') +
+               "  |\n";
+    };
+
+    print(border + "\n" + line(title) + line(author) + border + "\n",
           CLR_White, CLR_BgBlue, CLR_Bold);
     print_rst();
 
@@ -83,9 +78,11 @@ int run_application() {
         startup_args[1] == "--sct-ppl-helper") {
         return run_ppl_mode(startup_args);
     }
-    if (startup_args.size() >= 2 &&
-        startup_args[1] == "--sct-elevated-helper") {
-        return run_helper_mode(startup_args);
+
+    std::string startup_directory =
+        startup_value(startup_args, "--sct-cwd");
+    if (!startup_directory.empty()) {
+        set_current_directory(startup_directory);
     }
 
     bool force_console = false;
@@ -143,7 +140,6 @@ int run_application() {
         print_rst();
     }
     if (autoexec.exit_code != 0) {
-        elevated_session().stop(true);
         shutdown_command_cancellation();
         print_rst();
         terminal().stop_gui();
@@ -151,11 +147,19 @@ int run_application() {
         return autoexec.exit_code;
     }
 
+    std::string initial_command =
+        startup_value(startup_args, "--sct-run-command");
+    if (!autoexec.exit_requested && !initial_command.empty()) {
+        CommandContext context{std::cout};
+        execute_command_line(command_registry(), initial_command, context);
+        print_rst();
+        if (context.exit_requested) autoexec.exit_requested = true;
+    }
+
     if (!autoexec.exit_requested) {
         run_shell();
     }
 
-    elevated_session().stop(true);
     shutdown_command_cancellation();
     print_rst();
     terminal().stop_gui();

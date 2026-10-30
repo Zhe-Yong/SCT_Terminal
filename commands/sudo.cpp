@@ -4,6 +4,41 @@ std::string sudo_usage() {
     return "Usage: sudo ad | sudo sys | sudo su | sudo exit | sudo <command>\n";
 }
 
+static bool elevation_target(const std::string& subcommand,
+                             ElevationMode& mode,
+                             PrivilegeLevel& target) {
+    if (subcommand == "ad") {
+        mode = ElevationMode::Administrator;
+        target = PrivilegeLevel::Administrator;
+        return true;
+    }
+    if (subcommand == "sys") {
+        mode = ElevationMode::System;
+        target = PrivilegeLevel::System;
+        return true;
+    }
+    if (subcommand == "su") {
+        mode = ElevationMode::TrustedInstaller;
+        target = PrivilegeLevel::TrustedInstaller;
+        return true;
+    }
+    return false;
+}
+
+static int relaunch_or_report(CommandContext& context,
+                              ElevationMode mode,
+                              const std::string& command_line) {
+    std::string error;
+    if (!launch_elevated_self(mode, command_line, error)) {
+        if (error == "Command cancelled.") return ERR_CANCELLED;
+        print(context.out, "Failed to relaunch elevated process: " + error + "\n",
+              CLR_BrightRed);
+        return ERR_PERMISSION_DENIED;
+    }
+
+    ExitProcess(0);
+}
+
 static int handle_sudo(CommandContext& context) {
     if (context.args.positional_count() == 0) {
         print(context.out, sudo_usage(), CLR_BrightYellow);
@@ -15,33 +50,7 @@ static int handle_sudo(CommandContext& context) {
 
     ElevationMode mode = ElevationMode::Administrator;
     PrivilegeLevel target_level = PrivilegeLevel::Administrator;
-    bool session_command = true;
-
-    if (subcommand == "ad") {
-        mode = ElevationMode::Administrator;
-        target_level = PrivilegeLevel::Administrator;
-    } else if (subcommand == "sys") {
-        mode = ElevationMode::System;
-        target_level = PrivilegeLevel::System;
-    } else if (subcommand == "su") {
-        mode = ElevationMode::TrustedInstaller;
-        target_level = PrivilegeLevel::TrustedInstaller;
-    } else {
-        session_command = false;
-    }
-
-    if (session_command) {
-        if (elevated_session().active()) {
-            if (elevated_session().level() == target_level) {
-                print(context.out,
-                      "Already running as " +
-                          std::string(privilege_level_name(target_level)) + ".\n",
-                      privilege_color(target_level));
-                return ERR_NONE;
-            }
-            elevated_session().stop(true);
-        }
-
+    if (elevation_target(subcommand, mode, target_level)) {
         if (current_level >= target_level) {
             print(context.out,
                   "Already running as " +
@@ -50,36 +59,24 @@ static int handle_sudo(CommandContext& context) {
             return ERR_NONE;
         }
 
+        return relaunch_or_report(context, mode, "");
+    }
+
+    if (subcommand == "exit") {
+        if (current_level == PrivilegeLevel::User) {
+            print(context.out, "No elevated privileges to drop.\n",
+                  CLR_BrightYellow);
+            return ERR_NONE;
+        }
+
         std::string error;
-        if (!elevated_session().start(mode, error)) {
-            if (error == "Command cancelled.") return ERR_CANCELLED;
-            print(context.out, "Failed to start elevated session: " + error + "\n",
+        if (!relaunch_as_user(error)) {
+            print(context.out, "Failed to relaunch as User: " + error + "\n",
                   CLR_BrightRed);
             return ERR_PERMISSION_DENIED;
         }
 
-        print(context.out,
-              std::string(privilege_level_name(target_level)) +
-                  " session started. Use 'sudo exit' to leave it.\n",
-              privilege_color(target_level));
-        return ERR_NONE;
-    }
-
-    if (subcommand == "exit") {
-        if (elevated_session().active()) {
-            elevated_session().stop(true);
-            print(context.out, "Elevated session ended.\n", CLR_BrightGreen);
-            return ERR_NONE;
-        }
-        if (current_level != PrivilegeLevel::User) {
-            print(context.out,
-                  std::string(privilege_level_name(current_level)) +
-                      " privileges cannot be dropped.\n",
-                  CLR_BrightYellow);
-            return ERR_NONE;
-        }
-        print(context.out, "No elevated session is active.\n", CLR_BrightYellow);
-        return ERR_NONE;
+        ExitProcess(0);
     }
 
     std::string command_line = rest_after_first_token(context.raw_line);
@@ -93,17 +90,7 @@ static int handle_sudo(CommandContext& context) {
         return execute_command_line(command_registry(), command_line, nested);
     }
 
-    ElevatedResponse response;
-    std::string error;
-    if (!elevated_session().run_once(command_line, response, error)) {
-        if (error == "Command cancelled.") return ERR_CANCELLED;
-        print(context.out, "Failed to run elevated command: " + error + "\n",
-              CLR_BrightRed);
-        return ERR_PERMISSION_DENIED;
-    }
-
-    if (!response.output.empty()) context.out << response.output;
-    return response.exit_code;
+    return relaunch_or_report(context, ElevationMode::Administrator, command_line);
 }
 
 static CommandSchema make_sudo_schema() {
@@ -115,5 +102,5 @@ static CommandSchema make_sudo_schema() {
 
 static const CommandRegistration register_sudo_command(
     "sudo",
-    "Start an administrator, SYSTEM, or TrustedInstaller session, or run an elevated command.",
+    "Relaunch SCT as Administrator, SYSTEM, or TrustedInstaller.",
     make_sudo_schema(), handle_sudo);

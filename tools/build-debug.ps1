@@ -20,6 +20,7 @@ if (-not $sources) {
     throw 'No C++ source files were found.'
 }
 
+$buildNumber = Get-ProjectBuildNumber -Root $root
 $output = Join-Path $outputDirectory 'main.exe'
 $arguments = @(
     '-fdiagnostics-color=always',
@@ -30,6 +31,7 @@ $arguments = @(
     '-mwindows',
     '-Wall',
     '-Wextra',
+    ('-DSCT_BUILD_NUMBER={0}' -f $buildNumber),
     '-I', '.'
 ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
     '-o', $output,
@@ -39,7 +41,8 @@ $arguments = @(
     '-ladvapi32',
     '-lcrypt32',
     '-lwintrust',
-    '-lbcrypt'
+    '-lbcrypt',
+    '-lversion'
 )
 
 Write-Host ("Building x64 debug -> {0}" -f $output)

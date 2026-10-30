@@ -20,6 +20,9 @@ void print_plugin(const PluginInfo& info) {
 
     print("  " + info.file_name + " [" + status + "]\n",
           info.loaded ? CLR_BrightGreen : CLR_White);
+    print("    dll_ver: " + (info.dll_ver.empty() ? "unknown" : info.dll_ver) +
+              "\n",
+          CLR_Gray);
     print("    sha256: " + info.sha256 + "\n", CLR_Gray);
     if (info.signed_file) {
         print("    signer: " + info.signer_subject + "\n", CLR_Gray);

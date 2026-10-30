@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $root 'release'
+$buildNumber = Get-ProjectBuildNumber -Root $root
 New-Item -ItemType Directory -Force -Path $release | Out-Null
 
 function Get-BuildInfo {
@@ -58,6 +59,7 @@ function Invoke-Build {
         '-s',
         '-static',
         '-mwindows',
+        ('-DSCT_BUILD_NUMBER={0}' -f $buildNumber),
         '-I', '.'
     ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
         '-o', $info.Output,
@@ -67,7 +69,8 @@ function Invoke-Build {
         '-ladvapi32',
         '-lcrypt32',
         '-lwintrust',
-        '-lbcrypt'
+        '-lbcrypt',
+        '-lversion'
     )
 
     Write-Host ("Building {0} -> {1}" -f $TargetArch, $info.Output)

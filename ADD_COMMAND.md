@@ -29,11 +29,13 @@ SuperCommandTerminal/
 │   ├── rm.cpp
 │   ├── shell.cpp
 │   ├── taskkill.cpp
+│   ├── version.cpp
 │   ├── whoami.cpp
 │   └── sudo.cpp
 ├── global.h              集中包含系统头文件和项目头文件
+├── version.h             版本号、构建号和显示字符串
 ├── shell_host.h          Shell 主循环接口
-├── shell_host.cpp        提示符、输入处理和提升会话调度
+├── shell_host.cpp        提示符和输入处理
 ├── tools/
 │   ├── build-common.ps1  工具链解析、源文件收集和路径映射
 │   ├── build-release.ps1 自动编译根目录和 commands/ 下的 .cpp
@@ -119,7 +121,7 @@ static const CommandRegistration register_admin_command(
     handle_admin_command, 2);
 ```
 
-`execute_command_line` 会在执行命令前检查当前进程权限。权限不足时输出所需权限和当前权限，返回 `ERR_PERMISSION_DENIED`，并提示使用对应的 `sudo` 模式。提升会话中的检查在 helper 进程中执行，因此以会话目标权限为准。
+`execute_command_line` 会在执行命令前检查当前进程权限。权限不足时输出所需权限和当前权限，返回 `ERR_PERMISSION_DENIED`，并提示使用对应的 `sudo` 模式。`sudo` 重启后的 SCT 以目标身份运行，因此后续权限检查直接基于新进程令牌。
 
 ### 2.6 构建和测试
 
@@ -319,6 +321,7 @@ std::string command_line = rest_after_first_token(context.raw_line);
 | `shell` | `commands/shell.cpp` | `-hide`/`-h`、`-c`/`-p`，后接原始命令 | 0 |
 | `taskkill` | `commands/taskkill.cpp` | `-f`、`-t`、`-im`、`-pid` | 0 |
 | `whoami` | `commands/whoami.cpp` | 无参数 | 0 |
+| `version` | `commands/version.cpp` | 最多 1 个位置参数：`self` 或 DLL 名称 | 0 |
 | `sudo` | `commands/sudo.cpp` | `raw_tail`，最多 1 个位置参数 | 0 |
 
 `sudo` 支持：
@@ -331,7 +334,12 @@ sudo exit
 sudo <command>
 ```
 
-`cls` 清除当前控制台显示，可在本地和提升会话中使用。
+- `sudo ad` / `sudo sys` / `sudo su` 不再创建 helper 会话，而是关闭当前 SCT，并以 Administrator、SYSTEM 或 TrustedInstaller 身份启动新的 SCT。
+- 新进程继承当前工作目录；`sudo <command>` 会在新身份 SCT 启动后执行指定命令，然后保留交互提示符。
+- `sudo exit` 在已提升进程中通过 Explorer 以普通用户身份重新启动 SCT；普通用户进程下没有可退出的提升会话。
+- `sudo` 只接受一个子命令或一条命令；命令部分保持原始文本。
+
+`cls` 清除当前控制台显示。
 
 ### `ren`
 
@@ -388,7 +396,7 @@ shell [-hide|-h] [-c|-p] <command>
 - `-c` / `-p` / `-h` 必须位于 Command 之前。
 - Command 及其参数保持原样传递。
 - 如果 Command 本身以 `-` 或 `/` 开头，可先写 `--` 结束选项解析。
-- 子进程继承 SCT 当前进程的令牌，因此不会触发 UAC；若 SCT 处于提升会话，则提升 helper 中执行。
+- 子进程继承 SCT 当前进程的令牌，因此不会触发 UAC；SCT 已提升时直接以当前身份执行。
 - stdout 和 stderr 会实时回显到 SCT。
 - PowerShell 输出使用 UTF-8；cmd 输出会从系统 OEM 代码页转换为 UTF-8。
 - 未指定 `-c` / `-p` 时默认使用 PowerShell。
@@ -415,7 +423,7 @@ ppl off
 - `ppl off` 会先移除进程保护，成功后再停止并卸载 PPL 驱动，避免驱动长期驻留被利用。
 - 如果 `off` 的 `unprotect` 失败，会保留驱动以便重试，不会进入无法恢复的保护状态。
 - `ppl` 命令要求 Administrator 权限，PPL 不会在启动时自动启用。
-- `ppl on/off` 必须在已提升的主 SCT 进程中执行，不能通过 `sudo` 会话执行；请直接以管理员或更高权限启动 SCT。
+- `ppl on/off` 必须在已提升的主 SCT 进程中执行；可先执行 `sudo ad` / `sudo sys` / `sudo su` 重启 SCT，再执行 `ppl`。
 
 ### `taskkill`
 
@@ -586,7 +594,7 @@ build/debug/main.exe
 
 - 如果当前有命令正在执行，会请求取消当前命令，并阻止 Ctrl+C 关闭 SuperCommandTerminal。
 - 如果当前在输入提示符，会取消当前输入行并重新显示提示符。
-- 提升会话中的命令通过同一个取消事件通知 helper，因此 `sudo` 会话中的命令也可以取消。
+- 提升后的 SCT 是独立进程，使用自己的取消事件；原进程在重启前退出。
 - 进程同时忽略 CRT 的 `SIGINT` / `SIGBREAK` 默认处理，避免绕过控制台处理器导致主程序退出。
 
 命令终止由 `command.cpp` 统一处理，不需要每个命令单独实现：
@@ -621,7 +629,7 @@ ppl off
 
 - `ppl on` 默认使用 `SCT_PPL_TYPE`，未设置时为 `WinTcb`。
 - `ppl` 命令要求 Administrator 权限，并且必须在已提升的主 SCT 进程中执行。
-- 不要通过 `sudo ad` / `sudo sys` / `sudo su` 会话执行 `ppl on/off`；请直接以管理员或更高权限启动 SCT。
+- `sudo ad` / `sudo sys` / `sudo su` 会重启 SCT 为对应身份；重启后可直接在主进程执行 `ppl on/off`。
 - 普通发布包会在 `release\` 根目录包含 `ppl64.dll` 和 `ppl32.dll`，并打入 `SCT_x64.zip` / `SCT_x86.zip`；`-Arch all -Zip` 还会生成包含两者的 `SCT_all.zip`。
 - PPL 操作在独立的短生命周期 `--sct-ppl-helper` 子进程中执行，避免 PPL DLL 或驱动异常影响主 SCT。
 - `install`、`protect`、`unprotect`、`uninstall` 分别使用独立的 helper 进程；`unprotect` helper 退出后再启动新的 `uninstall` helper，确保驱动设备句柄已经释放。
@@ -661,7 +669,7 @@ ppl off
 - 命令前加 `ens:`（大小写不敏感）表示该命令失败时终止 SCT，并返回命令的错误码。
 - 不加 `ens:` 的命令失败后继续执行下一行。
 - `exit` 命令会结束脚本并跳过交互 Shell。
-- 脚本按启动时的 SCT 进程权限执行；需要提升的单条命令请使用 `sudo <command>`。
+- 脚本按启动时的 SCT 进程权限执行；`sudo ad` / `sudo sys` / `sudo su` 会重启 SCT，`sudo <command>` 会在新身份 SCT 中执行命令。
 
 示例：
 
@@ -682,10 +690,13 @@ shell -c echo autoexec done
 plugin -list
 plugin -enable <sha256>
 plugin -disable <sha256>
+version [self|DLL_NAME]
 ```
 
 - 插件放在程序目录的 `plugin\x64\*.dll` 或 `plugin\x86\*.dll`。
-- `plugin -list` 显示文件 SHA-256、签名者、SPKI SHA-256 和信任状态。
+- `plugin -list` 显示 `dll_ver`、文件 SHA-256、签名者、SPKI SHA-256 和信任状态。
+- `version` 或 `version self` 显示 SCT 自身版本、构建 ID 和架构；`version <DLL_NAME>` 查询插件 DLL 的 `dll_ver`。
+- 插件可在 DLL 中导出 `sct_plugin_dll_ver` 返回版本字符串；未导出时回退到 DLL 的 `FileVersion` 资源。
 - 未签名或未固定（pin）的插件必须手动执行 `plugin -enable <sha256>`。
 - 已固定签名者的插件在签名有效时自动加载。
 - 启用列表保存在程序目录的 `plugin-state.dat`，不是缓存目录；文件使用 AES-256-GCM 加密并原子替换，便于随程序目录移动。
@@ -718,4 +729,4 @@ static const std::vector<std::string> pins = {
 
 ### 15.5 构建
 
-构建脚本使用 `-mwindows` 生成 GUI 子系统程序。发布包仍包含 `--console` 入口和 PPL/elevation helper 模式。
+构建脚本使用 `-mwindows` 生成 GUI 子系统程序，并对所有 C/C++ 源文件和头文件计算 SHA-256，再取 CRC32 作为 8 位十六进制 `SCT_BUILD_NUMBER`，版本格式为 `x.y.z-build`。同一份代码会得到相同构建 ID。发布包仍包含 `--console` 入口和 PPL helper 模式。

@@ -156,9 +156,11 @@ struct SctCommandContext {
 };
 
 typedef uint32_t (SCT_PLUGIN_CALL *SctPluginAbiVersionFn)(void);
+typedef const char* (SCT_PLUGIN_CALL *SctPluginDllVersionFn)(void);
 typedef int (SCT_PLUGIN_CALL *SctPluginRegisterFn)(const SctHostApi* api);
 
 SCT_PLUGIN_EXPORT uint32_t SCT_PLUGIN_CALL sct_plugin_abi_version(void);
+SCT_PLUGIN_EXPORT const char* SCT_PLUGIN_CALL sct_plugin_dll_ver(void);
 SCT_PLUGIN_EXPORT int SCT_PLUGIN_CALL sct_plugin_register(const SctHostApi* api);
 
 #ifdef __cplusplus

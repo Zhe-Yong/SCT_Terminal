@@ -24,6 +24,7 @@
 #include <tlhelp32.h>
 #include <bits/stdc++.h>
 
+#include "version.h"
 #include "color_print.h"
 #include "tool.h"
 #include "error_code.h"

@@ -608,6 +608,12 @@ bool Terminal::Impl::create_window(std::string& error) {
 
     layout();
     ShowWindow(hwnd, SW_SHOW);
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    } else if (!IsWindowVisible(hwnd)) {
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    SetForegroundWindow(hwnd);
     UpdateWindow(hwnd);
     SetFocus(output);
     return true;

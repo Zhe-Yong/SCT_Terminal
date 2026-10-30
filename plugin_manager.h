@@ -4,6 +4,7 @@
 
 struct PluginInfo {
     std::string file_name;
+    std::string dll_ver;
     std::string sha256;
     std::string signer_subject;
     std::string signer_spki_sha256;
@@ -27,6 +28,9 @@ public:
                     bool emit_warnings);
     bool enable(const std::string& sha256, std::string& error);
     bool disable(const std::string& sha256, std::string& error);
+    bool dll_version(const std::string& file_name,
+                     std::string& version,
+                     std::string& error) const;
     std::vector<PluginInfo> list() const;
     bool initialized() const;
     const std::string& state_path() const;

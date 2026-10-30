@@ -623,9 +623,6 @@ int execute_command_line(CommandRegistry& registry,
     }
 
     if (aborted || result == ERR_CANCELLED) {
-        if (aborted && elevated_session().active()) {
-            elevated_session().stop(true);
-        }
         print(context.out, "\nCommand cancelled.\n", CLR_BrightYellow);
         return ERR_CANCELLED;
     }

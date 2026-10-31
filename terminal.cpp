@@ -1,6 +1,7 @@
 #include "global.h"
 
 #include <richedit.h>
+#include <windowsx.h>
 
 namespace {
 
@@ -20,6 +21,29 @@ constexpr int kStyleStrike = 1 << 3;
 constexpr int kStyleDim = 1 << 4;
 constexpr int kStyleReverse = 1 << 5;
 constexpr int kStyleHidden = 1 << 6;
+
+int blend_channel(int first, int second, int amount) {
+    return first + (second - first) * amount / 255;
+}
+
+void fill_caption_gradient(HDC dc, const RECT& rect,
+                           COLORREF top, COLORREF bottom) {
+    int height = rect.bottom - rect.top;
+    if (height <= 0) return;
+
+    for (int offset = 0; offset < height; ++offset) {
+        int amount = height == 1 ? 0 : offset * 255 / (height - 1);
+        COLORREF color = RGB(
+            blend_channel(GetRValue(top), GetRValue(bottom), amount),
+            blend_channel(GetGValue(top), GetGValue(bottom), amount),
+            blend_channel(GetBValue(top), GetBValue(bottom), amount));
+        RECT line{rect.left, rect.top + offset, rect.right,
+                  rect.top + offset + 1};
+        HBRUSH brush = CreateSolidBrush(color);
+        FillRect(dc, &line, brush);
+        DeleteObject(brush);
+    }
+}
 
 struct TerminalRun {
     std::string text;
@@ -326,6 +350,7 @@ struct Terminal::Impl {
     int font_point_size = kDefaultFontPointSize;
     HFONT font = nullptr;
     HBRUSH background = nullptr;
+    int caption_hot = -1;
     const wchar_t* rich_class = L"RICHEDIT50W";
     std::ios_base::fmtflags old_cout_flags{};
     std::ios_base::fmtflags old_cerr_flags{};
@@ -343,6 +368,9 @@ struct Terminal::Impl {
     void ui_thread_main();
     bool create_window(std::string& error);
     void layout();
+    void caption_rects(RECT& caption, RECT buttons[3], RECT& icon) const;
+    int caption_button_from_point(POINT point) const;
+    void paint_window_caption();
     int caret_position();
     int text_end();
     bool selection_in_input();
@@ -650,6 +678,128 @@ void Terminal::Impl::layout() {
     MoveWindow(output, margin, margin, width, height, TRUE);
 }
 
+void Terminal::Impl::caption_rects(RECT& caption, RECT buttons[3],
+                                   RECT& icon) const {
+    caption = {};
+    for (int index = 0; index < 3; ++index) buttons[index] = {};
+    icon = {};
+    if (!hwnd) return;
+
+    RECT window{};
+    GetWindowRect(hwnd, &window);
+
+    int frame_x = GetSystemMetrics(SM_CXSIZEFRAME) +
+                  GetSystemMetrics(SM_CXPADDEDBORDER);
+    int frame_y = GetSystemMetrics(SM_CYSIZEFRAME) +
+                  GetSystemMetrics(SM_CXPADDEDBORDER);
+    int caption_height = GetSystemMetrics(SM_CYCAPTION);
+    int button_width = GetSystemMetrics(SM_CXSIZE);
+    int button_height = GetSystemMetrics(SM_CYSIZE);
+
+    caption.left = window.left + frame_x;
+    caption.top = window.top + frame_y;
+    caption.right = window.right - frame_x;
+    caption.bottom = caption.top + caption_height;
+
+    int button_top = caption.top + (caption_height - button_height) / 2;
+    for (int index = 0; index < 3; ++index) {
+        int right = window.right - frame_x -
+                    (2 - index) * button_width;
+        buttons[index] = {right - button_width, button_top, right,
+                          button_top + button_height};
+    }
+
+    int icon_width = GetSystemMetrics(SM_CXSMICON);
+    int icon_height = GetSystemMetrics(SM_CYSMICON);
+    icon.left = caption.left + 4;
+    icon.top = caption.top + (caption_height - icon_height) / 2;
+    icon.right = icon.left + icon_width;
+    icon.bottom = icon.top + icon_height;
+}
+
+int Terminal::Impl::caption_button_from_point(POINT point) const {
+    RECT caption{};
+    RECT buttons[3]{};
+    RECT icon{};
+    caption_rects(caption, buttons, icon);
+    for (int index = 0; index < 3; ++index) {
+        if (PtInRect(&buttons[index], point)) return index;
+    }
+    return -1;
+}
+
+void Terminal::Impl::paint_window_caption() {
+    if (!hwnd) return;
+
+    RECT caption{};
+    RECT buttons[3]{};
+    RECT icon{};
+    caption_rects(caption, buttons, icon);
+
+    HDC dc = GetWindowDC(hwnd);
+    if (!dc) return;
+
+    bool active = GetActiveWindow() == hwnd;
+    COLORREF top = GetSysColor(active ? COLOR_GRADIENTACTIVECAPTION
+                                      : COLOR_GRADIENTINACTIVECAPTION);
+    COLORREF bottom = GetSysColor(active ? COLOR_ACTIVECAPTION
+                                         : COLOR_INACTIVECAPTION);
+    fill_caption_gradient(dc, caption, top, bottom);
+
+    HICON window_icon = reinterpret_cast<HICON>(
+        GetClassLongPtrW(hwnd, GCLP_HICONSM));
+    if (!window_icon) {
+        window_icon = reinterpret_cast<HICON>(
+            GetClassLongPtrW(hwnd, GCLP_HICON));
+    }
+    if (window_icon) {
+        int icon_width = GetSystemMetrics(SM_CXSMICON);
+        int icon_height = GetSystemMetrics(SM_CYSMICON);
+        DrawIconEx(dc, icon.left, icon.top, window_icon, icon_width,
+                   icon_height, 0, nullptr, DI_NORMAL);
+    }
+
+    RECT text_rect = caption;
+    text_rect.left = icon.right + 6;
+    text_rect.right = buttons[0].left - 6;
+    if (text_rect.right > text_rect.left) {
+        wchar_t title[512]{};
+        int length = GetWindowTextW(hwnd, title,
+                                    static_cast<int>(std::size(title)));
+        if (length > 0) {
+            int old_mode = SetBkMode(dc, TRANSPARENT);
+            COLORREF old_color = SetTextColor(
+                dc, GetSysColor(active ? COLOR_CAPTIONTEXT
+                                       : COLOR_INACTIVECAPTIONTEXT));
+            HFONT old_font = reinterpret_cast<HFONT>(
+                SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT)));
+            DrawTextW(dc, title, length, &text_rect,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE |
+                          DT_END_ELLIPSIS | DT_NOPREFIX);
+            SelectObject(dc, old_font);
+            SetTextColor(dc, old_color);
+            SetBkMode(dc, old_mode);
+        }
+    }
+
+    bool maximized = IsZoomed(hwnd) != FALSE;
+    for (int index = 0; index < 3; ++index) {
+        UINT state = 0;
+        if (index == 0) {
+            state |= DFCS_CAPTIONMIN;
+        } else if (index == 1) {
+            state |= maximized ? DFCS_CAPTIONRESTORE : DFCS_CAPTIONMAX;
+        } else {
+            state |= DFCS_CAPTIONCLOSE;
+        }
+        if (!active) state |= DFCS_INACTIVE;
+        if (caption_hot == index) state |= DFCS_HOT;
+        DrawFrameControl(dc, &buttons[index], DFC_CAPTION, state);
+    }
+
+    ReleaseDC(hwnd, dc);
+}
+
 int Terminal::Impl::caret_position() {
     CHARRANGE range{};
     SendMessageW(output, EM_EXGETSEL, 0,
@@ -923,6 +1073,60 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             info->ptMinTrackSize.x = 500;
             info->ptMinTrackSize.y = 300;
             return 0;
+        }
+        case WM_NCHITTEST:
+            if (self) {
+                POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+                RECT caption{};
+                RECT buttons[3]{};
+                RECT icon{};
+                self->caption_rects(caption, buttons, icon);
+                if (PtInRect(&icon, point)) return HTSYSMENU;
+                for (int index = 0; index < 3; ++index) {
+                    if (PtInRect(&buttons[index], point)) {
+                        if (index == 0) return HTMINBUTTON;
+                        if (index == 1) return HTMAXBUTTON;
+                        return HTCLOSE;
+                    }
+                }
+                if (PtInRect(&caption, point)) return HTCAPTION;
+            }
+            break;
+        case WM_NCMOUSEMOVE:
+            if (self) {
+                TRACKMOUSEEVENT tracking{};
+                tracking.cbSize = sizeof(tracking);
+                tracking.dwFlags = TME_LEAVE | TME_NONCLIENT;
+                tracking.hwndTrack = hwnd;
+                TrackMouseEvent(&tracking);
+
+                POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+                int hot = self->caption_button_from_point(point);
+                if (hot != self->caption_hot) {
+                    self->caption_hot = hot;
+                    self->paint_window_caption();
+                }
+                return 0;
+            }
+            break;
+        case WM_NCMOUSELEAVE:
+            if (self) {
+                if (self->caption_hot != -1) {
+                    self->caption_hot = -1;
+                    self->paint_window_caption();
+                }
+                return 0;
+            }
+            break;
+        case WM_NCPAINT: {
+            LRESULT result = DefWindowProcW(hwnd, message, wparam, lparam);
+            if (self) self->paint_window_caption();
+            return result;
+        }
+        case WM_NCACTIVATE: {
+            LRESULT result = DefWindowProcW(hwnd, message, wparam, lparam);
+            if (self) self->paint_window_caption();
+            return result;
         }
         case WM_ERASEBKGND:
             if (self && self->background) {

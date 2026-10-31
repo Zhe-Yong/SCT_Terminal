@@ -350,9 +350,10 @@ sudo exit
 sudo <command>
 ```
 
-- `sudo ad` / `sudo sys` / `sudo su` 不再创建 helper 会话，而是关闭当前 SCT，并以 Administrator、SYSTEM 或 TrustedInstaller 身份启动新的 SCT。
+- `sudo ad` / `sudo sys` / `sudo su` 不再创建 helper 会话，而是以 Administrator、SYSTEM 或 TrustedInstaller 身份启动新的 SCT；新窗口成功显示后，当前 SCT 才退出。
+- 如果新窗口未能在 30 秒内显示，当前 SCT 保持运行并输出错误，避免两个进程都不可用。
 - 新进程继承当前工作目录；`sudo <command>` 会在新身份 SCT 启动后执行指定命令，然后保留交互提示符。
-- `sudo exit` 在已提升进程中通过 Explorer 以普通用户身份重新启动 SCT；普通用户进程下没有可退出的提升会话。
+- `sudo exit` 在已提升进程中通过 Explorer 以普通用户身份重新启动 SCT；同样等待新窗口显示后再退出当前进程。普通用户进程下没有可退出的提升会话。
 - `sudo` 只接受一个子命令或一条命令；命令部分保持原始文本。
 
 `cls` 清除当前控制台显示。
@@ -740,6 +741,7 @@ static const std::vector<std::string> pins = {
 ### 15.4 GUI 终端
 
 - 默认启动 Win32 GUI 终端，不创建控制台窗口。
+- 标题栏使用自绘的 Windows Basic 风格：隐藏系统默认的最小化、最大化、关闭按钮，重新绘制图标、标题和按钮；拖动、双击最大化、缩放和系统菜单继续由系统处理。
 - 使用 `SCT64.exe --console`（x86 为 `SCT32.exe --console`）强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。
 - GUI 中 `shell` 默认捕获输出并显示在终端内；`shell -window`（或 `-w`）让子进程使用独立窗口，`-hide`（或 `-h`）保持隐藏。
 - GUI 使用单个 RichEdit 控件，输入直接显示在提示符后，支持 ANSI SGR 颜色、清屏、历史记录、光标编辑和 Ctrl+C 取消当前输入/命令。

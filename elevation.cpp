@@ -8,6 +8,57 @@ bool file_exists(const std::wstring& path) {
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+bool is_sct_window(HWND window) {
+    wchar_t class_name[64]{};
+    if (!GetClassNameW(window, class_name,
+                       static_cast<int>(sizeof(class_name) /
+                                        sizeof(class_name[0])))) {
+        return false;
+    }
+    return wcscmp(class_name, L"SCTTerminalWindow") == 0;
+}
+
+bool contains_process_id(const std::vector<DWORD>& process_ids,
+                         DWORD process_id) {
+    for (DWORD value : process_ids) {
+        if (value == process_id) return true;
+    }
+    return false;
+}
+
+BOOL CALLBACK collect_sct_window(HWND window, LPARAM parameter) {
+    if (!is_sct_window(window)) return TRUE;
+
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(window, &process_id);
+    if (process_id == 0) return TRUE;
+
+    auto* process_ids =
+        reinterpret_cast<std::vector<DWORD>*>(parameter);
+    if (!contains_process_id(*process_ids, process_id)) {
+        process_ids->push_back(process_id);
+    }
+    return TRUE;
+}
+
+struct NewSctWindowSearch {
+    const std::vector<DWORD>* existing = nullptr;
+    DWORD found = 0;
+};
+
+BOOL CALLBACK find_new_sct_window(HWND window, LPARAM parameter) {
+    if (!is_sct_window(window) || !IsWindowVisible(window)) return TRUE;
+
+    auto* search = reinterpret_cast<NewSctWindowSearch*>(parameter);
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(window, &process_id);
+    if (process_id == 0 || process_id == GetCurrentProcessId()) return TRUE;
+    if (contains_process_id(*search->existing, process_id)) return TRUE;
+
+    search->found = process_id;
+    return FALSE;
+}
+
 std::wstring nsudo_launcher_path(const std::string& executable) {
     size_t separator = executable.find_last_of("\\/");
     std::string directory = separator == std::string::npos
@@ -74,6 +125,29 @@ bool launch_process_direct(const std::wstring& file,
     return true;
 }
 
+}
+
+std::vector<DWORD> sct_window_process_ids() {
+    std::vector<DWORD> process_ids;
+    EnumWindows(&collect_sct_window,
+                reinterpret_cast<LPARAM>(&process_ids));
+    return process_ids;
+}
+
+bool wait_for_new_sct_window(const std::vector<DWORD>& existing,
+                             DWORD timeout_ms,
+                             std::string& error) {
+    ULONGLONG deadline = GetTickCount64() + timeout_ms;
+    while (GetTickCount64() < deadline) {
+        NewSctWindowSearch search{&existing, 0};
+        EnumWindows(&find_new_sct_window,
+                    reinterpret_cast<LPARAM>(&search));
+        if (search.found != 0) return true;
+        Sleep(50);
+    }
+
+    error = "The new SCT window did not open.";
+    return false;
 }
 
 bool is_process_elevated() {

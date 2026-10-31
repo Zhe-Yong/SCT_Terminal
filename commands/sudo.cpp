@@ -28,12 +28,22 @@ static bool elevation_target(const std::string& subcommand,
 static int relaunch_or_report(CommandContext& context,
                               ElevationMode mode,
                               const std::string& command_line) {
+    std::vector<DWORD> existing = sct_window_process_ids();
+
     std::string error;
     if (!launch_elevated_self(mode, command_line, error)) {
         if (error == "Command cancelled.") return ERR_CANCELLED;
         print(context.out, "Failed to relaunch elevated process: " + error + "\n",
               CLR_BrightRed);
         return ERR_PERMISSION_DENIED;
+    }
+
+    if (!wait_for_new_sct_window(existing, 30000, error)) {
+        print(context.out,
+              "Failed to wait for the new SCT window: " + error +
+                  " The current window will stay open.\n",
+              CLR_BrightRed);
+        return ERR_UNKNOWN;
     }
 
     ExitProcess(0);
@@ -69,11 +79,20 @@ static int handle_sudo(CommandContext& context) {
             return ERR_NONE;
         }
 
+        std::vector<DWORD> existing = sct_window_process_ids();
         std::string error;
         if (!relaunch_as_user(error)) {
             print(context.out, "Failed to relaunch as User: " + error + "\n",
                   CLR_BrightRed);
             return ERR_PERMISSION_DENIED;
+        }
+
+        if (!wait_for_new_sct_window(existing, 30000, error)) {
+            print(context.out,
+                  "Failed to wait for the new SCT window: " + error +
+                      " The current window will stay open.\n",
+                  CLR_BrightRed);
+            return ERR_UNKNOWN;
         }
 
         ExitProcess(0);

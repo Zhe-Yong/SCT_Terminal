@@ -75,6 +75,7 @@ function Invoke-Build {
         '-lcrypt32',
         '-lwintrust',
         '-lbcrypt',
+        '-luxtheme',
         '-lversion'
     )
 

@@ -45,6 +45,7 @@ $arguments = @(
     '-lcrypt32',
     '-lwintrust',
     '-lbcrypt',
+    '-luxtheme',
     '-lversion'
 )
 

@@ -26,7 +26,7 @@ SuperCommandTerminal/
 │   ├── dir.cpp
 │   ├── echo.cpp
 │   ├── exit.cpp
-│   ├── ppl.cpp
+│   ├── protect.cpp
 │   ├── ren.cpp
 │   ├── rm.cpp
 │   ├── shell.cpp
@@ -36,6 +36,8 @@ SuperCommandTerminal/
 │   └── sudo.cpp
 ├── certificate.h         证书生成与文件签名接口
 ├── certificate.cpp       证书生成、子证书签发和 Authenticode 签名
+├── protection.h          keep 保护接口
+├── protection.cpp        进程 DACL keep 保护
 ├── icon/
 │   ├── SCT64.png         x64 图标源文件
 │   ├── SCT64.ico         x64 程序图标
@@ -333,7 +335,7 @@ std::string command_line = rest_after_first_token(context.raw_line);
 | `exit` | `commands/exit.cpp` | 无参数 | 0 |
 | `ren` | `commands/ren.cpp` | 2 个位置参数 | 0 |
 | `rm` | `commands/rm.cpp` | `-r`、`-f`、`-rf`、`--no-preserve-root`，可接收多个路径 | 0 |
-| `ppl` | `commands/ppl.cpp` | `on [TYPE]` / `off` | 2 |
+| `protect` | `commands/protect.cpp` | `ppl on [TYPE]` / `ppl off`，`keep [on|1|off|0]` | 0（`ppl` 需 Administrator） |
 | `shell` | `commands/shell.cpp` | `-hide`/`-h`、`-c`/`-p`，后接原始命令 | 0 |
 | `taskkill` | `commands/taskkill.cpp` | `-f`、`-t`、`-im`、`-pid` | 0 |
 | `whoami` | `commands/whoami.cpp` | 无参数 | 0 |
@@ -427,20 +429,23 @@ shell -h -p Get-ChildItem C:\Windows | Select-Object -First 5
 shell -- -CommandThatStartsWithDash
 ```
 
-### `ppl`
+### `protect`
 
 ```text
-ppl on [TYPE]
-ppl off
+protect ppl on [TYPE]
+protect ppl off
+protect keep [on|1|off|0]
 ```
 
-- `TYPE` 可选值为 `Authenticode`、`CodeGen`、`Antimalware`、`Lsa`、`Windows`、`WinTcb`、`WinSystem`。
+- `protect ppl` 用于管理 PPL 保护，`TYPE` 可选值为 `Authenticode`、`CodeGen`、`Antimalware`、`Lsa`、`Windows`、`WinTcb`、`WinSystem`。
 - 未指定 `TYPE` 时使用 `SCT_PPL_TYPE`，默认 `WinTcb`。
-- `ppl on` 会显式加载并启动 PPL 驱动，然后设置进程保护；保护失败时会尝试卸载驱动。
-- `ppl off` 会先移除进程保护，成功后再停止并卸载 PPL 驱动，避免驱动长期驻留被利用。
+- `protect ppl on` 会显式加载并启动 PPL 驱动，然后设置进程保护；保护失败时会尝试卸载驱动。
+- `protect ppl off` 会先移除进程保护，成功后再停止并卸载 PPL 驱动，避免驱动长期驻留被利用。
 - 如果 `off` 的 `unprotect` 失败，会保留驱动以便重试，不会进入无法恢复的保护状态。
-- `ppl` 命令要求 Administrator 权限，PPL 不会在启动时自动启用。
-- `ppl on/off` 必须在已提升的主 SCT 进程中执行；可先执行 `sudo ad` / `sudo sys` / `sudo su` 重启 SCT，再执行 `ppl`。
+- `protect ppl` 要求 Administrator 权限，并且必须在已提升的主 SCT 进程中执行；可先执行 `sudo ad` / `sudo sys` / `sudo su` 重启 SCT。
+- `protect keep` 默认开启；`protect keep on` / `1` 开启，`protect keep off` / `0` 关闭。
+- 开启 keep 后会为当前进程注册拒绝 `PROCESS_TERMINATE` 的 DACL，关闭按钮、Alt+F4、`WM_CLOSE` 和 `taskkill` 都无法关闭 SCT；只能输入 `exit` 命令退出。
+- `protect keep off` 会恢复原始进程 DACL，之后可以正常关闭。
 
 ### `taskkill`
 
@@ -458,8 +463,10 @@ taskkill [-f] [-t] (-im <imagename> | -pid <processid>)
 行为说明：
 
 - `-im` 和 `-pid` 不能同时使用。
-- 不加 `-f` 时发送终止信号：向目标窗口发送 `WM_CLOSE`，并向目标线程发送 `WM_QUIT`。
-- 加 `-f` 时使用 `TerminateProcess` 强制终止。
+- 不加 `-f` 时向目标窗口发送 `WM_CLOSE`，并向非 SCT 目标线程补发 `WM_QUIT`。
+- SCT 目标只接收 `WM_CLOSE`，由 SCT 自行取消正在运行的命令并退出。
+- 对 SCT 目标使用 `-f` 会返回访问拒绝；请改用不带 `-f` 的 `taskkill` 请求正常关闭。
+- 对非 SCT 目标加 `-f` 时使用 `TerminateProcess` 强制终止。
 - 使用 SCT 当前进程令牌执行，不提升权限，也不会弹出 UAC。
 - 不调用 `cmd.exe` 或其他 shell，直接使用 Win32 进程和线程 API。
 - 使用当前用户权限无法访问的进程会返回权限错误。
@@ -642,36 +649,38 @@ PPLcontrolRunCommandLineW
 PPL 不会自动启用，需要手动执行：
 
 ```text
-ppl on [TYPE]
-ppl off
+protect ppl on [TYPE]
+protect ppl off
 ```
 
-- `ppl on` 默认使用 `SCT_PPL_TYPE`，未设置时为 `WinTcb`。
-- `ppl` 命令要求 Administrator 权限，并且必须在已提升的主 SCT 进程中执行。
-- `sudo ad` / `sudo sys` / `sudo su` 会重启 SCT 为对应身份；重启后可直接在主进程执行 `ppl on/off`。
+- `protect ppl on` 默认使用 `SCT_PPL_TYPE`，未设置时为 `WinTcb`。
+- `protect ppl` 要求 Administrator 权限，并且必须在已提升的主 SCT 进程中执行。
+- `sudo ad` / `sudo sys` / `sudo su` 会重启 SCT 为对应身份；重启后可直接在主进程执行 `protect ppl on/off`。
 - 普通发布包会在 `release\` 根目录包含 `ppl64.dll` 和 `ppl32.dll`，并打入 `SCT_x64.zip` / `SCT_x86.zip`；`-Arch all -Zip` 还会生成包含两者的 `SCT_all.zip`。
 - PPL 操作在独立的短生命周期 `--sct-ppl-helper` 子进程中执行，避免 PPL DLL 或驱动异常影响主 SCT。
 - `install`、`protect`、`unprotect`、`uninstall` 分别使用独立的 helper 进程；`unprotect` helper 退出后再启动新的 `uninstall` helper，确保驱动设备句柄已经释放。
 - `uninstall` 直接通过 SCM 停止 `RTCore64` / `RTCore32` 服务，等待进入 `STOPPED` 状态后再删除服务，避免驱动句柄未释放导致 `STOP_PENDING`。
 - 如果驱动长时间停留在 `STOP_PENDING`，会标记删除并提示需要重启。
-- `ppl on` 调用 `PPLcontrolInstallDriver` 加载并启动驱动，然后执行 `protect`；如果保护失败，会尝试卸载驱动。
-- 如果驱动已经加载导致安装接口返回失败，但 `protect` 成功，`ppl on` 仍视为成功。
-- `ppl off` 调用 `unprotect`，成功后通过 SCM 停止并删除驱动服务。
-- 如果 `unprotect` 失败，`ppl off` 不会卸载驱动，以便保留恢复手段。
+- `protect ppl on` 调用 `PPLcontrolInstallDriver` 加载并启动驱动，然后执行 `protect`；如果保护失败，会尝试卸载驱动。
+- 如果驱动已经加载导致安装接口返回失败，但 `protect` 成功，`protect ppl on` 仍视为成功。
+- `protect ppl off` 调用 `unprotect`，成功后通过 SCM 停止并删除驱动服务。
+- 如果 `unprotect` 失败，`protect ppl off` 不会卸载驱动，以便保留恢复手段。
 
 环境变量：
 
 | 变量 | 含义 |
 | --- | --- |
-| `SCT_PPL_TYPE` | `ppl on` 的默认保护类型，默认 `WinTcb` |
+| `SCT_PPL_TYPE` | `protect ppl on` 的默认保护类型，默认 `WinTcb` |
 
 注意：
 
 - PPL 操作需要管理员权限，并会加载 PPLcontrol 附带的内核驱动。
-- 如果 `ppl off` 的 `unprotect` 失败，会保留驱动并返回失败信息，以便重试。
-- 在启用 DSE、Secure Boot 或易受攻击驱动黑名单的系统上，驱动可能无法加载。
+- 如果 `protect ppl off` 的 `unprotect` 失败，会保留驱动并返回失败信息，以便重试。
+- 在启用 DSE、Secure Boot 或易受攻击驱动黑名单的系统上，RTCore 驱动可能无法加载。
+- Windows 默认可能启用 `VulnerableDriverBlocklistEnable`，此时 `protect ppl on` 会提示驱动被阻止；可改用 `protect keep on`，或在确认风险后调整系统策略。
+- 32 位 SCT 不能在 64 位 Windows 上使用 PPL，请使用 `SCT64.exe`。
 - 建议在测试虚拟机中验证。
-- PPL 保护会限制普通管理员终止或调试 SCT；必要时使用 `ppl off`。
+- PPL 保护会限制普通管理员终止或调试 SCT；必要时使用 `protect ppl off`。
 
 ## 14. autoexec.sct 启动脚本
 
@@ -743,6 +752,8 @@ static const std::vector<std::string> pins = {
 - 默认启动 Win32 GUI 终端，不创建控制台窗口。
 - 标题栏使用自绘的 Windows Basic 风格：隐藏系统默认的最小化、最大化、关闭按钮，重新绘制图标、标题和按钮；拖动、双击最大化、缩放和系统菜单继续由系统处理。
 - 标题栏按客户区原点计算并裁剪绘制区域，窗口移动、最大化、缩放和 DPI 变化时按钮位置与指针命中区域保持一致；最小化、最大化/还原和关闭按钮直接处理点击，并在状态变化后重绘。
+- 右侧滚动条通过 `SetWindowTheme(output, L"", L"")` 禁用视觉主题，保持 Windows Basic/经典样式。
+- 关闭按钮、`Alt+F4`、`WM_SYSCOMMAND SC_CLOSE` 和外部 `WM_CLOSE` 都走程序的关闭流程：取消正在运行的命令、唤醒输入等待并退出进程。
 - 使用 `SCT64.exe --console`（x86 为 `SCT32.exe --console`）强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。
 - GUI 中 `shell` 默认捕获输出并显示在终端内；`shell -window`（或 `-w`）让子进程使用独立窗口，`-hide`（或 `-h`）保持隐藏。
 - GUI 使用单个 RichEdit 控件，输入直接显示在提示符后，支持 ANSI SGR 颜色、清屏、历史记录、光标编辑和 Ctrl+C 取消当前输入/命令。

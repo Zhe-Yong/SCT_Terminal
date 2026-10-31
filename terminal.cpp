@@ -1,6 +1,7 @@
 #include "global.h"
 
 #include <richedit.h>
+#include <uxtheme.h>
 #include <windowsx.h>
 
 namespace {
@@ -633,6 +634,7 @@ bool Terminal::Impl::create_window(std::string& error) {
         return false;
     }
 
+    SetWindowTheme(output, L"", L"");
     SendMessageW(output, EM_SETBKGNDCOLOR, 0, RGB(12, 12, 12));
     SendMessageW(output, EM_SETUNDOLIMIT, 0, 0);
     SendMessageW(output, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -1054,6 +1056,13 @@ void Terminal::Impl::zoom_from_wheel(int delta) {
 }
 
 void Terminal::Impl::close_window() {
+    if (keep_protection_enabled() && !shutting_down.load()) {
+        std::cout << "\nProtected: type 'exit' to close SCT.\n";
+        std::cout.flush();
+        return;
+    }
+
+    request_command_cancel();
     shutting_down.store(true);
     condition.notify_all();
     DestroyWindow(hwnd);
@@ -1078,6 +1087,19 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                 self->paint_window_caption();
             }
             return 0;
+        case WM_SYSKEYDOWN:
+            if (self && wparam == VK_F4 &&
+                (lparam & (1 << 29)) != 0) {
+                self->close_window();
+                return 0;
+            }
+            break;
+        case WM_SYSCOMMAND:
+            if (self && (wparam & 0xFFF0) == SC_CLOSE) {
+                self->close_window();
+                return 0;
+            }
+            break;
         case WM_SETFOCUS:
             if (self && self->output) SetFocus(self->output);
             return 0;
@@ -1218,6 +1240,13 @@ LRESULT CALLBACK Terminal::Impl::editor_proc(HWND hwnd, UINT message,
                                              WPARAM wparam, LPARAM lparam) {
     Impl* self = reinterpret_cast<Impl*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    if (message == WM_SYSKEYDOWN && wparam == VK_F4 &&
+        (lparam & (1 << 29)) != 0) {
+        HWND parent = GetParent(hwnd);
+        if (parent) PostMessageW(parent, WM_CLOSE, 0, 0);
+        return 0;
+    }
 
     if (self) {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;

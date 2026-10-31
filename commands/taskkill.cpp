@@ -99,6 +99,43 @@ std::string process_label(DWORD pid, const std::wstring& name) {
     return label;
 }
 
+struct SctWindowSearch {
+    DWORD pid = 0;
+    bool found = false;
+};
+
+BOOL CALLBACK find_sct_window(HWND window, LPARAM parameter) {
+    auto* search = reinterpret_cast<SctWindowSearch*>(parameter);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid != search->pid) return TRUE;
+
+    wchar_t class_name[64]{};
+    if (GetClassNameW(window, class_name,
+                      static_cast<int>(sizeof(class_name) /
+                                       sizeof(class_name[0]))) &&
+        wcscmp(class_name, L"SCTTerminalWindow") == 0) {
+        search->found = true;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+bool process_has_sct_window(DWORD pid) {
+    SctWindowSearch search;
+    search.pid = pid;
+    EnumWindows(find_sct_window, reinterpret_cast<LPARAM>(&search));
+    return search.found;
+}
+
+bool is_sct_process(DWORD pid, const std::wstring& name) {
+    std::string lower_name = lower_ascii(wide_to_utf8(name));
+    if (lower_name == "sct64.exe" || lower_name == "sct32.exe") {
+        return true;
+    }
+    return process_has_sct_window(pid);
+}
+
 bool send_thread_quit(DWORD pid) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return false;
@@ -127,7 +164,10 @@ int graceful_terminate(CommandContext& context,
     signal.pid = pid;
     EnumWindows(enum_window_callback, reinterpret_cast<LPARAM>(&signal));
 
-    bool sent = signal.sent > 0 || send_thread_quit(pid);
+    bool sent = signal.sent > 0;
+    if (!sent || !is_sct_process(pid, name)) {
+        sent = sent || send_thread_quit(pid);
+    }
     if (sent) {
         print(context.out,
               "SUCCESS: Sent termination signal to " +
@@ -147,6 +187,14 @@ int graceful_terminate(CommandContext& context,
 int force_terminate(CommandContext& context,
                     DWORD pid,
                     const std::wstring& name) {
+    if (is_sct_process(pid, name)) {
+        print(context.out,
+              "ERROR: Access is denied. SCT processes handle close requests "
+              "themselves; use taskkill without -f to request a normal close.\n",
+              CLR_BrightRed);
+        return ERR_PERMISSION_DENIED;
+    }
+
     HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
     if (!process) {
         DWORD code = GetLastError();
@@ -330,6 +378,9 @@ CommandSchema make_taskkill_schema() {
 const CommandRegistration register_taskkill_command(
     "taskkill",
     "Terminate processes by image name or PID. Options: -f, -t, -im, -pid.",
-    make_taskkill_schema(), handle_taskkill);
+    make_taskkill_schema(), handle_taskkill, 0,
+    "Usage: taskkill [-f] [-t] (-im <imagename> | -pid <processid>)\n"
+    "SCT processes handle WM_CLOSE themselves; -f is denied for SCT "
+    "targets.");
 
 }

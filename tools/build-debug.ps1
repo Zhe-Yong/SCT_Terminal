@@ -21,6 +21,8 @@ if (-not $sources) {
 }
 
 $buildId = Get-ProjectBuildId -Root $root
+$iconResource = Build-IconResource -Root $root -Compiler $compiler `
+    -TargetArch 'x64' -OutputDirectory $outputDirectory
 $output = Join-Path $outputDirectory 'SCT64.exe'
 $arguments = @(
     '-fdiagnostics-color=always',
@@ -34,6 +36,7 @@ $arguments = @(
     ('-DSCT_BUILD_NUMBER={0}' -f $buildId),
     '-I', '.'
 ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
+    $iconResource,
     '-o', $output,
     '-lshell32',
     '-lole32',

@@ -36,6 +36,13 @@ SuperCommandTerminal/
 │   └── sudo.cpp
 ├── certificate.h         证书生成与文件签名接口
 ├── certificate.cpp       证书生成、子证书签发和 Authenticode 签名
+├── icon/
+│   ├── SCT64.png         x64 图标源文件
+│   ├── SCT64.ico         x64 程序图标
+│   ├── sct_icon_x64.rc   x64 图标资源脚本
+│   ├── SCT32.png         x86 图标源文件
+│   ├── SCT32.ico         x86 程序图标
+│   └── sct_icon_x86.rc   x86 图标资源脚本
 ├── global.h              集中包含系统头文件和项目头文件
 ├── version.h             版本号、构建 ID 和显示字符串
 ├── shell_host.h          Shell 主循环接口
@@ -576,6 +583,7 @@ x86：
 构建脚本会自动：
 
 - 生成 `release/SCT64.exe`（x64）或 `release/SCT32.exe`（x86）
+- 使用 `windres` 编译 `icon/` 下对应架构的图标资源并链接到程序
 - 编译根目录 `*.cpp`
 - 编译 `commands/*.cpp`
 - 添加项目根目录为 include 路径

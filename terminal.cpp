@@ -567,7 +567,15 @@ bool Terminal::Impl::create_window(std::string& error) {
     window_class.lpfnWndProc = &Terminal::Impl::window_proc;
     window_class.hInstance = instance;
     window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32513));
-    window_class.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+    HICON icon = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0,
+        LR_DEFAULTSIZE | LR_SHARED));
+    if (!icon) icon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+    window_class.hIcon = icon;
+    HICON small_icon = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_SHARED));
+    if (!small_icon) small_icon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+    window_class.hIconSm = small_icon;
     window_class.hbrBackground = background;
     window_class.lpszClassName = L"SCTTerminalWindow";
     if (!RegisterClassExW(&window_class) &&

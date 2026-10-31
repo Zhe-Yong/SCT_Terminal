@@ -18,3 +18,4 @@
 - 新增：`cert` 支持生成自签名证书、由父 PFX 签发子证书、导出 PFX/DER，以及使用 PFX 进行 Authenticode 文件签名。
 - 调整：`help <command>` 读取命令注册时提供的帮助文本。
 - 调整：构建产物改名为 `SCT64.exe` 和 `SCT32.exe`，ZIP 文件名保持不变。
+- 新增：为 `SCT64.exe` 和 `SCT32.exe` 嵌入对应架构的程序图标，并同步窗口图标。

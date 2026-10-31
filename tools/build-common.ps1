@@ -113,6 +113,42 @@ function Get-ProjectBuildId {
     return Get-Crc32Hex -Bytes $digest
 }
 
+function Build-IconResource {
+    param(
+        [string]$Root,
+        [string]$Compiler,
+        [string]$TargetArch,
+        [string]$OutputDirectory
+    )
+
+    $windres = Join-Path (Split-Path -Parent $Compiler) 'windres.exe'
+    if (-not (Test-Path -LiteralPath $windres)) {
+        throw ("windres for {0} was not found: {1}" -f $TargetArch, $windres)
+    }
+
+    $scriptPath = Join-Path $Root ("icon\sct_icon_{0}.rc" -f $TargetArch)
+    if (-not (Test-Path -LiteralPath $scriptPath)) {
+        throw ("Icon resource script was not found: {0}" -f $scriptPath)
+    }
+
+    New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+    $output = Join-Path $OutputDirectory ("sct_icon_{0}.o" -f $TargetArch)
+    $compilerDirectory = Split-Path -Parent $Compiler
+    $originalPath = $env:PATH
+    Push-Location ([System.IO.Path]::GetTempPath())
+    try {
+        $env:PATH = $compilerDirectory + ';' + $originalPath
+        & $windres '-I' (Join-Path $Root 'icon') $scriptPath '-O' 'coff' '-o' $output
+        if ($LASTEXITCODE -ne 0) {
+            throw ("Icon resource compilation failed for {0} with exit code {1}." -f $TargetArch, $LASTEXITCODE)
+        }
+        return $output
+    } finally {
+        $env:PATH = $originalPath
+        Pop-Location
+    }
+}
+
 function Get-ProjectSourceFiles {
     param([string]$Root)
 

@@ -52,6 +52,10 @@ function Invoke-Build {
         throw 'No C++ source files were found.'
     }
 
+    $iconResource = Build-IconResource -Root $root -Compiler $compiler `
+        -TargetArch $TargetArch `
+        -OutputDirectory (Join-Path $root ("build\obj\{0}" -f $TargetArch))
+
     $arguments = @(
         '-fdiagnostics-color=always',
         '-std=c++17',
@@ -62,6 +66,7 @@ function Invoke-Build {
         ('-DSCT_BUILD_NUMBER={0}' -f $buildId),
         '-I', '.'
     ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
+        $iconResource,
         '-o', $info.Output,
         '-lshell32',
         '-lole32',

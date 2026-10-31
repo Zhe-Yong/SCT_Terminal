@@ -685,26 +685,23 @@ void Terminal::Impl::caption_rects(RECT& caption, RECT buttons[3],
     icon = {};
     if (!hwnd) return;
 
-    RECT window{};
-    GetWindowRect(hwnd, &window);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    POINT origin{0, 0};
+    ClientToScreen(hwnd, &origin);
 
-    int frame_x = GetSystemMetrics(SM_CXSIZEFRAME) +
-                  GetSystemMetrics(SM_CXPADDEDBORDER);
-    int frame_y = GetSystemMetrics(SM_CYSIZEFRAME) +
-                  GetSystemMetrics(SM_CXPADDEDBORDER);
     int caption_height = GetSystemMetrics(SM_CYCAPTION);
     int button_width = GetSystemMetrics(SM_CXSIZE);
     int button_height = GetSystemMetrics(SM_CYSIZE);
 
-    caption.left = window.left + frame_x;
-    caption.top = window.top + frame_y;
-    caption.right = window.right - frame_x;
-    caption.bottom = caption.top + caption_height;
+    caption.left = origin.x;
+    caption.right = origin.x + client.right - client.left;
+    caption.top = origin.y - caption_height;
+    caption.bottom = origin.y;
 
     int button_top = caption.top + (caption_height - button_height) / 2;
     for (int index = 0; index < 3; ++index) {
-        int right = window.right - frame_x -
-                    (2 - index) * button_width;
+        int right = caption.right - (2 - index) * button_width;
         buttons[index] = {right - button_width, button_top, right,
                           button_top + button_height};
     }
@@ -736,8 +733,20 @@ void Terminal::Impl::paint_window_caption() {
     RECT icon{};
     caption_rects(caption, buttons, icon);
 
+    RECT window{};
+    GetWindowRect(hwnd, &window);
+    OffsetRect(&caption, -window.left, -window.top);
+    OffsetRect(&icon, -window.left, -window.top);
+    for (int index = 0; index < 3; ++index) {
+        OffsetRect(&buttons[index], -window.left, -window.top);
+    }
+
     HDC dc = GetWindowDC(hwnd);
     if (!dc) return;
+
+    int saved_dc = SaveDC(dc);
+    IntersectClipRect(dc, caption.left, caption.top, caption.right,
+                      caption.bottom);
 
     bool active = GetActiveWindow() == hwnd;
     COLORREF top = GetSysColor(active ? COLOR_GRADIENTACTIVECAPTION
@@ -797,6 +806,7 @@ void Terminal::Impl::paint_window_caption() {
         DrawFrameControl(dc, &buttons[index], DFC_CAPTION, state);
     }
 
+    RestoreDC(dc, saved_dc);
     ReleaseDC(hwnd, dc);
 }
 
@@ -1063,7 +1073,10 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
 
     switch (message) {
         case WM_SIZE:
-            if (self) self->layout();
+            if (self) {
+                self->layout();
+                self->paint_window_caption();
+            }
             return 0;
         case WM_SETFOCUS:
             if (self && self->output) SetFocus(self->output);
@@ -1116,6 +1129,26 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                     self->paint_window_caption();
                 }
                 return 0;
+            }
+            break;
+        case WM_NCLBUTTONDOWN:
+            if (self) {
+                if (wparam == HTMINBUTTON) {
+                    self->caption_hot = -1;
+                    ShowWindow(hwnd, SW_MINIMIZE);
+                    return 0;
+                }
+                if (wparam == HTMAXBUTTON) {
+                    ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE
+                                                    : SW_MAXIMIZE);
+                    self->caption_hot = -1;
+                    self->paint_window_caption();
+                    return 0;
+                }
+                if (wparam == HTCLOSE) {
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    return 0;
+                }
             }
             break;
         case WM_NCPAINT: {

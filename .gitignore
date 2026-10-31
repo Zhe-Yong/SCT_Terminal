@@ -1,10 +1,10 @@
-# Root-level build outputs (one executable per root .cpp)
-/*.exe
+# Code build outputs (one executable per root .cpp)
+/Code/*.exe
 
 # Debug build output
-/build/
+/Code/build/
 
 # Not official release build output
-/release/
+/Code/release/
 
 .vscode

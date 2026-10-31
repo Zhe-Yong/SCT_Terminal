@@ -5,7 +5,7 @@
 ## 1. 目录结构
 
 ```text
-SuperCommandTerminal/
+Code/
 ├── command.h             命令参数、上下文、注册表接口
 ├── command.cpp           参数解析、注册表、命令执行
 ├── cancel.h              Ctrl+C 与命令取消接口
@@ -602,7 +602,7 @@ x86：
 
 ### VS Code 调试
 
-在 VS Code 中选择 `Debug SCT x64` 并按 F5。`.vscode/launch.json` 会先执行 `C/C++: Build SCT x64 debug`，通过 `tools/build-debug.ps1` 编译所有源文件：
+在 VS Code 中选择 `Debug SCT x64` 并按 F5。仓库根目录的 `.vscode/launch.json` 会先执行 `C/C++: Build SCT x64 debug`，通过 `Code/tools/build-debug.ps1` 编译所有源文件：
 
 ```text
 build/debug/SCT64.exe

@@ -20,9 +20,11 @@ SuperCommandTerminal/
 │   └── ppl32.dll         32 位 PPL 控制 DLL
 ├── commands/             每个命令一个独立 .cpp
 │   ├── help.cpp
+│   ├── cert.cpp
 │   ├── cd.cpp
 │   ├── cls.cpp
 │   ├── dir.cpp
+│   ├── echo.cpp
 │   ├── exit.cpp
 │   ├── ppl.cpp
 │   ├── ren.cpp
@@ -32,14 +34,16 @@ SuperCommandTerminal/
 │   ├── version.cpp
 │   ├── whoami.cpp
 │   └── sudo.cpp
+├── certificate.h         证书生成与文件签名接口
+├── certificate.cpp       证书生成、子证书签发和 Authenticode 签名
 ├── global.h              集中包含系统头文件和项目头文件
-├── version.h             版本号、构建号和显示字符串
+├── version.h             版本号、构建 ID 和显示字符串
 ├── shell_host.h          Shell 主循环接口
 ├── shell_host.cpp        提示符和输入处理
 ├── tools/
 │   ├── build-common.ps1  工具链解析、源文件收集和路径映射
 │   ├── build-release.ps1 自动编译根目录和 commands/ 下的 .cpp
-│   └── build-debug.ps1   生成 build/debug/main.exe 供 VS Code 调试
+│   └── build-debug.ps1   生成 build/debug/SCT64.exe 供 VS Code 调试
 └── ADD_COMMAND.md        本说明
 ```
 
@@ -94,12 +98,14 @@ static CommandSchema make_echo_schema() {
 
 ```cpp
 static const CommandRegistration register_echo_command(
-    "echo", "Print text.", make_echo_schema(), handle_echo, 0);
+    "echo", "Print text.", make_echo_schema(), handle_echo, 0,
+    "Usage: echo [--] <message...>\n"
+    "Print text to the terminal.");
 ```
 
 程序启动时，`CommandRegistration` 会自动把命令加入全局注册表。命令会出现在 `help` 列表中，不需要修改中央代码。
 
-第五个参数 `requireElevation` 可选，省略时为 `0`。
+第五个参数 `requireElevation` 可选，省略时为 `0`。第六个参数 `help` 可选，供 `help <command>` 读取；命令帮助应在注册时提供，不要另建帮助表。
 
 ### 2.5 命令权限要求
 
@@ -132,8 +138,9 @@ static const CommandRegistration register_admin_command(
 快速测试：
 
 ```powershell
-@('echo hello', 'echo -n hello', 'echo --n hello', 'exit') |
-    & .\release\main.exe
+@('echo hello', 'echo -f brightgreen -b black -t bold hello',
+    'echo -- -t not-an-option', 'exit') |
+    & .\release\SCT64.exe
 ```
 
 ## 3. 参数规则
@@ -310,10 +317,12 @@ std::string command_line = rest_after_first_token(context.raw_line);
 
 | 命令 | 文件 | 参数规则 | requireElevation |
 | --- | --- | --- | --- |
-| `help` | `commands/help.cpp` | 无参数 | 0 |
+| `help` | `commands/help.cpp` | 最多 1 个位置参数：命令名 | 0 |
 | `cd` | `commands/cd.cpp` | `-d` 开关，最多 1 个位置参数 | 0 |
+| `cert` | `commands/cert.cpp` | `-gen` 或 `-sign`，最多 1 个位置参数 | 0 |
 | `cls` | `commands/cls.cpp` | 无参数，清除当前显示 | 0 |
 | `dir` / `ls` | `commands/dir.cpp` | `-a`、`-d`、`-t`，可接收多个路径 | 0 |
+| `echo` | `commands/echo.cpp` | `-f`/`-b`/`-t`，后接消息文本 | 0 |
 | `exit` | `commands/exit.cpp` | 无参数 | 0 |
 | `ren` | `commands/ren.cpp` | 2 个位置参数 | 0 |
 | `rm` | `commands/rm.cpp` | `-r`、`-f`、`-rf`、`--no-preserve-root`，可接收多个路径 | 0 |
@@ -566,6 +575,7 @@ x86：
 
 构建脚本会自动：
 
+- 生成 `release/SCT64.exe`（x64）或 `release/SCT32.exe`（x86）
 - 编译根目录 `*.cpp`
 - 编译 `commands/*.cpp`
 - 添加项目根目录为 include 路径
@@ -579,7 +589,7 @@ x86：
 在 VS Code 中选择 `Debug SCT x64` 并按 F5。`.vscode/launch.json` 会先执行 `C/C++: Build SCT x64 debug`，通过 `tools/build-debug.ps1` 编译所有源文件：
 
 ```text
-build/debug/main.exe
+build/debug/SCT64.exe
 ```
 
 `launch.json` 使用 `PATH` 中的 `gdb.exe`。请把 MSYS2 UCRT64 的 `bin` 目录加入 `PATH`，或自行在 `launch.json` 中配置 `miDebuggerPath`。
@@ -722,10 +732,13 @@ static const std::vector<std::string> pins = {
 ### 15.4 GUI 终端
 
 - 默认启动 Win32 GUI 终端，不创建控制台窗口。
-- 使用 `main.exe --console` 强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。
+- 使用 `SCT64.exe --console`（x86 为 `SCT32.exe --console`）强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。
 - GUI 中 `shell` 默认捕获输出并显示在终端内；`shell -window`（或 `-w`）让子进程使用独立窗口，`-hide`（或 `-h`）保持隐藏。
 - GUI 使用单个 RichEdit 控件，输入直接显示在提示符后，支持 ANSI SGR 颜色、清屏、历史记录、光标编辑和 Ctrl+C 取消当前输入/命令。
 - 提示符和已输出内容不会被编辑；Backspace、Delete、粘贴等操作只作用于当前输入行。
+- 支持 `Ctrl+鼠标滚轮` 调整终端字号（6-32pt），历史输出和输入保持同一字号；缩放仅对当前会话生效，并保留已有颜色、加粗等格式。
+- 字号范围由 `terminal.cpp` 中的 `kMinFontPointSize` 和 `kMaxFontPointSize` 控制，默认值由 `kDefaultFontPointSize` 控制。
+- 已输出内容不可编辑、不可拖动；选中后拖动不会移动文本。
 
 ### 15.5 构建
 

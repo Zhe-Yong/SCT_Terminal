@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $root 'release'
-$buildNumber = Get-ProjectBuildNumber -Root $root
+$buildId = Get-ProjectBuildId -Root $root
 New-Item -ItemType Directory -Force -Path $release | Out-Null
 
 function Get-BuildInfo {
@@ -27,7 +27,7 @@ function Get-BuildInfo {
             Compiler = Resolve-BuildCompiler -Explicit $X64Compiler `
                 -CommandNames @('x86_64-w64-mingw32-g++.exe', 'g++.exe') `
                 -Architecture 'x64' -EnvironmentVariable 'SCT_X64_COMPILER'
-            Output = (Join-Path $release 'main.exe')
+            Output = (Join-Path $release 'SCT64.exe')
             Name = 'x64'
         }
     }
@@ -36,7 +36,7 @@ function Get-BuildInfo {
         Compiler = Resolve-BuildCompiler -Explicit $X86Compiler `
             -CommandNames @('i686-w64-mingw32-g++.exe') `
             -Architecture 'x86' -EnvironmentVariable 'SCT_X86_COMPILER'
-        Output = (Join-Path $release 'main32.exe')
+        Output = (Join-Path $release 'SCT32.exe')
         Name = 'x86'
     }
 }
@@ -59,7 +59,7 @@ function Invoke-Build {
         '-s',
         '-static',
         '-mwindows',
-        ('-DSCT_BUILD_NUMBER={0}' -f $buildNumber),
+        ('-DSCT_BUILD_NUMBER={0}' -f $buildId),
         '-I', '.'
     ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
         '-o', $info.Output,
@@ -123,9 +123,9 @@ function New-ReleaseArchive {
     }
 
     $executables = switch ($TargetArch) {
-        'x64' { @('main.exe') }
-        'x86' { @('main32.exe') }
-        default { @('main.exe', 'main32.exe') }
+        'x64' { @('SCT64.exe') }
+        'x86' { @('SCT32.exe') }
+        default { @('SCT64.exe', 'SCT32.exe') }
     }
 
     $items = @()

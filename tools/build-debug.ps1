@@ -20,8 +20,8 @@ if (-not $sources) {
     throw 'No C++ source files were found.'
 }
 
-$buildNumber = Get-ProjectBuildNumber -Root $root
-$output = Join-Path $outputDirectory 'main.exe'
+$buildId = Get-ProjectBuildId -Root $root
+$output = Join-Path $outputDirectory 'SCT64.exe'
 $arguments = @(
     '-fdiagnostics-color=always',
     '-std=c++17',
@@ -31,7 +31,7 @@ $arguments = @(
     '-mwindows',
     '-Wall',
     '-Wextra',
-    ('-DSCT_BUILD_NUMBER={0}' -f $buildNumber),
+    ('-DSCT_BUILD_NUMBER={0}' -f $buildId),
     '-I', '.'
 ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
     '-o', $output,

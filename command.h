@@ -64,6 +64,7 @@ using CommandHandler = std::function<int(CommandContext&)>;
 struct Command {
     std::string name;
     std::string description;
+    std::string help;
     CommandSchema schema;
     CommandHandler handler;
     int require_elevation = 0;
@@ -76,7 +77,8 @@ public:
              const std::string& description,
              CommandSchema schema,
              CommandHandler handler,
-             int require_elevation = 0);
+             int require_elevation = 0,
+             const std::string& help = {});
     bool try_add(const std::string& name,
                  const std::string& description,
                  CommandSchema schema,
@@ -98,7 +100,8 @@ public:
                         const std::string& description,
                         CommandSchema schema,
                         CommandHandler handler,
-                        int require_elevation = 0);
+                        int require_elevation = 0,
+                        const std::string& help = {});
 };
 
 std::string lower_ascii(const std::string& text);

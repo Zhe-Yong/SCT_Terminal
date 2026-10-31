@@ -1,9 +1,20 @@
 ## 2026.10.29
-This is the start of this file.
+本文件创建。
 
 ## 2026.10.29
-- Added code-derived 8-character build IDs (CRC32 of the source SHA-256) and the `version [self|DLL_NAME]` command.
-- Added plugin `dll_ver` reporting through `sct_plugin_dll_ver` and DLL FileVersion fallback.
-- Changed elevation to close and relaunch SCT as the target identity instead of using helper sessions.
-- Fixed relaunched elevated windows opening minimized or hidden.
-- Updated the startup banner to derive its version and width automatically.
+- 新增：根据源码 SHA-256 的 CRC32 生成 8 位十六进制构建 ID，并新增 `version [self|DLL_NAME]` 命令。
+- 新增：插件可通过 `sct_plugin_dll_ver` 上报 `dll_ver`，未导出时回退到 DLL 的 `FileVersion`。
+- 撤销：移除提权 helper 会话，改为关闭并重启 SCT 为目标身份。
+- 修复：提权后的窗口默认最小化或隐藏。
+- 调整：启动横幅根据版本号和内容宽度自动调整。
+
+## 2026.10.31
+- 调整：统一终端字号，`version` 输出的版本号不再高亮显示。
+- 修复：禁用选中终端输出后的拖动，避免文本被移动导致显示错乱。
+- 新增：支持 `Ctrl+鼠标滚轮` 调整终端字号（6-32pt），仅对当前会话生效。
+- 修复：缩放后不再重置已有文字颜色和加粗样式。
+- 文档：更新 `ADD_COMMAND.md` 中的 GUI 终端维护说明。
+- 新增：`echo` 支持前景色、背景色和 ANSI 样式。
+- 新增：`cert` 支持生成自签名证书、由父 PFX 签发子证书、导出 PFX/DER，以及使用 PFX 进行 Authenticode 文件签名。
+- 调整：`help <command>` 读取命令注册时提供的帮助文本。
+- 调整：构建产物改名为 `SCT64.exe` 和 `SCT32.exe`，ZIP 文件名保持不变。

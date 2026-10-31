@@ -9,6 +9,10 @@ constexpr UINT WM_TERMINAL_CLEAR = WM_APP + 2;
 constexpr UINT WM_TERMINAL_TITLE = WM_APP + 3;
 constexpr UINT WM_TERMINAL_BEGIN_INPUT = WM_APP + 4;
 
+constexpr int kDefaultFontPointSize = 12;
+constexpr int kMinFontPointSize = 6;
+constexpr int kMaxFontPointSize = 32;
+
 constexpr int kStyleBold = 1 << 0;
 constexpr int kStyleItalic = 1 << 1;
 constexpr int kStyleUnderline = 1 << 2;
@@ -319,6 +323,7 @@ struct Terminal::Impl {
     WNDPROC editor_old_proc = nullptr;
     int input_start = 0;
     bool input_active = false;
+    int font_point_size = kDefaultFontPointSize;
     HFONT font = nullptr;
     HBRUSH background = nullptr;
     const wchar_t* rich_class = L"RICHEDIT50W";
@@ -351,6 +356,8 @@ struct Terminal::Impl {
     void drain();
     void close_window();
     void append_run(const TerminalRun& run);
+    void set_font_point_size(int point_size);
+    void zoom_from_wheel(int delta);
 
     static LRESULT CALLBACK window_proc(HWND hwnd, UINT message,
                                         WPARAM wparam, LPARAM lparam);
@@ -546,10 +553,14 @@ void Terminal::Impl::ui_thread_main() {
 bool Terminal::Impl::create_window(std::string& error) {
     HINSTANCE instance = GetModuleHandleW(nullptr);
     background = CreateSolidBrush(RGB(12, 12, 12));
-    font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                       FIXED_PITCH | FF_MODERN, L"Consolas");
+    HDC screen = GetDC(nullptr);
+    int dpi = screen ? GetDeviceCaps(screen, LOGPIXELSY) : 96;
+    if (screen) ReleaseDC(nullptr, screen);
+    font = CreateFontW(-MulDiv(font_point_size, dpi, 72), 0, 0, 0, FW_NORMAL,
+                       FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+                       L"Consolas");
 
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
@@ -577,7 +588,7 @@ bool Terminal::Impl::create_window(std::string& error) {
     output = CreateWindowExW(
         0, rich_class, L"",
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
-            ES_NOHIDESEL,
+            ES_NOHIDESEL | ES_NOOLEDRAGDROP,
         0, 0, 0, 0, hwnd, (HMENU)1001, instance, nullptr);
     if (!output) {
         error = "Failed to create terminal editor control.";
@@ -594,7 +605,7 @@ bool Terminal::Impl::create_window(std::string& error) {
     format.cbSize = sizeof(format);
     format.dwMask = CFM_COLOR | CFM_FACE | CFM_SIZE | CFM_CHARSET;
     format.crTextColor = RGB(220, 220, 220);
-    format.yHeight = 240;
+    format.yHeight = font_point_size * 20;
     format.bCharSet = DEFAULT_CHARSET;
     wcscpy_s(format.szFaceName, L"Consolas");
     SendMessageW(output, EM_SETCHARFORMAT, SCF_DEFAULT,
@@ -813,9 +824,13 @@ void Terminal::Impl::append_run(const TerminalRun& run) {
     CHARFORMAT2W format{};
     format.cbSize = sizeof(format);
     format.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD | CFM_ITALIC |
-                    CFM_UNDERLINE | CFM_STRIKEOUT;
+                    CFM_UNDERLINE | CFM_STRIKEOUT | CFM_FACE | CFM_SIZE |
+                    CFM_CHARSET;
     format.crTextColor = ansi_color(foreground, false);
     format.crBackColor = ansi_color(background, true);
+    format.yHeight = font_point_size * 20;
+    format.bCharSet = DEFAULT_CHARSET;
+    wcscpy_s(format.szFaceName, L"Consolas");
     format.dwEffects = 0;
     if ((run.style & kStyleBold) != 0) format.dwEffects |= CFE_BOLD;
     if ((run.style & kStyleItalic) != 0) format.dwEffects |= CFE_ITALIC;
@@ -828,6 +843,46 @@ void Terminal::Impl::append_run(const TerminalRun& run) {
     selection.cpMax = end;
     SendMessageW(output, EM_EXSETSEL, 0,
                  reinterpret_cast<LPARAM>(&selection));
+}
+
+void Terminal::Impl::set_font_point_size(int point_size) {
+    point_size = std::clamp(point_size, kMinFontPointSize, kMaxFontPointSize);
+    if (!output || point_size == font_point_size) return;
+    font_point_size = point_size;
+
+    CHARRANGE selection{};
+    SendMessageW(output, EM_EXGETSEL, 0,
+                 reinterpret_cast<LPARAM>(&selection));
+    POINT scroll{};
+    SendMessageW(output, EM_GETSCROLLPOS, 0,
+                 reinterpret_cast<LPARAM>(&scroll));
+
+    CHARFORMAT2W format{};
+    format.cbSize = sizeof(format);
+    format.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
+    format.yHeight = font_point_size * 20;
+    format.bCharSet = DEFAULT_CHARSET;
+    wcscpy_s(format.szFaceName, L"Consolas");
+
+    SendMessageW(output, WM_SETREDRAW, FALSE, 0);
+    CHARRANGE all{0, -1};
+    SendMessageW(output, EM_EXSETSEL, 0,
+                 reinterpret_cast<LPARAM>(&all));
+    SendMessageW(output, EM_SETCHARFORMAT, SCF_SELECTION,
+                 reinterpret_cast<LPARAM>(&format));
+    SendMessageW(output, EM_EXSETSEL, 0,
+                 reinterpret_cast<LPARAM>(&selection));
+    SendMessageW(output, EM_SETSCROLLPOS, 0,
+                 reinterpret_cast<LPARAM>(&scroll));
+    SendMessageW(output, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(output, nullptr, TRUE);
+}
+
+void Terminal::Impl::zoom_from_wheel(int delta) {
+    if (delta == 0) return;
+    int steps = delta / WHEEL_DELTA;
+    if (steps == 0) steps = delta > 0 ? 1 : -1;
+    set_font_point_size(font_point_size + steps);
 }
 
 void Terminal::Impl::close_window() {
@@ -902,6 +957,12 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             return 0;
         case WM_TERMINAL_TITLE:
             return 0;
+        case WM_MOUSEWHEEL:
+            if (self && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+                self->zoom_from_wheel(GET_WHEEL_DELTA_WPARAM(wparam));
+                return 0;
+            }
+            break;
         default:
             break;
     }
@@ -915,6 +976,31 @@ LRESULT CALLBACK Terminal::Impl::editor_proc(HWND hwnd, UINT message,
 
     if (self) {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+        if (message == WM_MOUSEWHEEL && ctrl) {
+            self->zoom_from_wheel(GET_WHEEL_DELTA_WPARAM(wparam));
+            return 0;
+        }
+
+        if (message == WM_LBUTTONDOWN &&
+            (GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+            CHARRANGE range{};
+            SendMessageW(hwnd, EM_EXGETSEL, 0,
+                         reinterpret_cast<LPARAM>(&range));
+            if (range.cpMin != range.cpMax) {
+                POINTS points = MAKEPOINTS(lparam);
+                POINT point{points.x, points.y};
+                LRESULT index = SendMessageW(
+                    hwnd, EM_CHARFROMPOS, 0,
+                    reinterpret_cast<LPARAM>(&point));
+                if (index >= range.cpMin && index < range.cpMax) {
+                    CHARRANGE caret{static_cast<LONG>(index),
+                                    static_cast<LONG>(index)};
+                    SendMessageW(hwnd, EM_EXSETSEL, 0,
+                                 reinterpret_cast<LPARAM>(&caret));
+                }
+            }
+        }
 
         if (message == WM_KEYDOWN) {
             if (!self->input_active) {

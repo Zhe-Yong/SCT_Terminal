@@ -40,6 +40,7 @@
 #include "plugin_security.h"
 #include "plugin_trusted_signers.h"
 #include "plugin_manager.h"
+#include "certificate.h"
 
 // Constant definitions
 constexpr int64_t unix_expire = 1800000000;

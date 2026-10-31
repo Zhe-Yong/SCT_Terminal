@@ -416,10 +416,12 @@ void CommandRegistry::add(const std::string& name,
                           const std::string& description,
                           CommandSchema schema,
                           CommandHandler handler,
-                          int require_elevation) {
+                          int require_elevation,
+                          const std::string& help) {
     Command command;
     command.name = name;
     command.description = description;
+    command.help = help;
     command.schema = std::move(schema);
     command.handler = std::move(handler);
     command.require_elevation = std::clamp(require_elevation, 0, 4);
@@ -487,9 +489,10 @@ CommandRegistration::CommandRegistration(const std::string& name,
                                          const std::string& description,
                                          CommandSchema schema,
                                          CommandHandler handler,
-                                         int require_elevation) {
+                                         int require_elevation,
+                                         const std::string& help) {
     command_registry().add(name, description, std::move(schema),
-                           std::move(handler), require_elevation);
+                           std::move(handler), require_elevation, help);
 }
 
 int execute_command_line(CommandRegistry& registry,

@@ -21,7 +21,7 @@
                                     "kind":  "build",
                                     "isDefault":  true
                                 },
-                      "detail":  "Build all SCT sources with debug symbols into build\\debug\\main.exe."
+                      "detail":  "Build all SCT sources with debug symbols into build\\debug\\SCT64.exe."
                   },
                   {
                       "type":  "shell",
@@ -44,7 +44,7 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build 64-bit SCT into release, bundle NSudo runtimes, and create SCT_x64.zip."
+                      "detail":  "Build 64-bit SCT into release/SCT64.exe, bundle NSudo runtimes, and create SCT_x64.zip."
                   },
                   {
                       "type":  "shell",
@@ -67,7 +67,7 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build 32-bit SCT into release, bundle NSudo runtimes, and create SCT_x86.zip. Requires the MSYS2 mingw32 toolchain."
+                      "detail":  "Build 32-bit SCT into release/SCT32.exe, bundle NSudo runtimes, and create SCT_x86.zip. Requires the MSYS2 mingw32 toolchain."
                   },
                   {
                       "type":  "shell",

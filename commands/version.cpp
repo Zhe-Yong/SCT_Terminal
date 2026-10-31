@@ -12,8 +12,8 @@ std::string architecture_name() {
 
 void print_self_version(std::ostream& out) {
     print(out, "SuperCommandTerminal " + std::string(SCT_VERSION_TEXT) + "\n",
-          CLR_BrightCyan);
-    print(out, "Build:        " +
+          CLR_NONE);
+    print(out, "Build ID:     " +
                    std::string(SCT_VERSION_STRINGIFY(SCT_BUILD_NUMBER)) + "\n",
           CLR_Gray);
     print(out, "Architecture: " + architecture_name() + "\n", CLR_Gray);
@@ -35,7 +35,7 @@ static int handle_version(CommandContext& context) {
         return ERR_FILE_NOT_FOUND;
     }
 
-    print(context.out, target + ": " + version + "\n", CLR_BrightCyan);
+    print(context.out, target + ": " + version + "\n", CLR_NONE);
     return ERR_NONE;
 }
 

@@ -44,7 +44,7 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build 64-bit SCT into Code/release/SCT64.exe, bundle NSudo runtimes, and create SCT_x64.zip."
+                      "detail":  "Build 64-bit SCT into release/normal/SCT64.exe, bundle NSudo runtimes, and create SCT_x64.zip."
                   },
                   {
                       "type":  "shell",
@@ -67,7 +67,7 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build 32-bit SCT into Code/release/SCT32.exe, bundle NSudo runtimes, and create SCT_x86.zip. Requires the MSYS2 mingw32 toolchain."
+                      "detail":  "Build 32-bit SCT into release/normal/SCT32.exe, bundle NSudo runtimes, and create SCT_x86.zip. Requires the MSYS2 mingw32 toolchain."
                   },
                   {
                       "type":  "shell",
@@ -90,7 +90,31 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build both architectures into Code/release and create SCT_x64.zip, SCT_x86.zip, and SCT_all.zip."
+                      "detail":  "Build both architectures into release/normal and create SCT_x64.zip, SCT_x86.zip, and SCT_all.zip."
+                  },
+                  {
+                      "type":  "shell",
+                      "label":  "C/C++: Build SCT x64 + x86 random-title release",
+                      "command":  "powershell.exe",
+                      "args":  [
+                                   "-NoProfile",
+                                   "-ExecutionPolicy",
+                                   "Bypass",
+                                   "-File",
+                                   "${workspaceFolder}\\Code\\tools\\build-release.ps1",
+                                   "-Arch",
+                                   "all",
+                                   "-RandomTitle",
+                                   "-Zip"
+                               ],
+                      "options":  {
+                                      "cwd":  "${workspaceFolder}\\Code"
+                                  },
+                      "problemMatcher":  [
+                                             "$gcc"
+                                         ],
+                      "group":  "build",
+                      "detail":  "Build both architectures with random 16-character titles into release/random."
                   }
               ],
     "version":  "2.0.0"

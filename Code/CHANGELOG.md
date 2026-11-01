@@ -29,4 +29,6 @@
 - 调整：原 `ppl` 命令移动到 `protect ppl on/off`。
 - 新增：`protect keep [on|1|off|0]` 为当前进程注册拒绝终止的 DACL；开启后关闭请求被阻止，只能输入 `exit` 退出。
 - 改进：`protect ppl on` 失败时显示驱动安装错误、易受攻击驱动黑名单状态，并在 32 位 SCT 运行于 64 位 Windows 时直接提示不支持。
+- 新增：`start <program|script|document> [arguments...]`；程序和脚本优先用 `CreateProcessW` 直接启动，文档/URL 回退 `ShellExecuteExW`，保留原始参数并异步独立运行。
 - 新增：README.md
+- 新增：`build-release.ps1 -RandomTitle` 随机标题发布变体，每次启动生成 16 位字母数字标题，输出到项目根目录 `release/random/`，普通发布输出到 `release/normal/`，文件名仍为 `SCT64.exe` / `SCT32.exe`。

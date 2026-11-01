@@ -30,6 +30,7 @@ Code/
 │   ├── ren.cpp
 │   ├── rm.cpp
 │   ├── shell.cpp
+│   ├── start.cpp
 │   ├── taskkill.cpp
 │   ├── version.cpp
 │   ├── whoami.cpp
@@ -337,6 +338,7 @@ std::string command_line = rest_after_first_token(context.raw_line);
 | `rm` | `commands/rm.cpp` | `-r`、`-f`、`-rf`、`--no-preserve-root`，可接收多个路径 | 0 |
 | `protect` | `commands/protect.cpp` | `ppl on [TYPE]` / `ppl off`，`keep [on|1|off|0]` | 0（`ppl` 需 Administrator） |
 | `shell` | `commands/shell.cpp` | `-hide`/`-h`、`-c`/`-p`，后接原始命令 | 0 |
+| `start` | `commands/start.cpp` | `<program\|script\|document> [arguments...]` | 0 |
 | `taskkill` | `commands/taskkill.cpp` | `-f`、`-t`、`-im`、`-pid` | 0 |
 | `whoami` | `commands/whoami.cpp` | 无参数 | 0 |
 | `version` | `commands/version.cpp` | 最多 1 个位置参数：`self` 或 DLL 名称 | 0 |
@@ -427,6 +429,29 @@ shell -c echo hello
 shell -p Write-Output "hello"
 shell -h -p Get-ChildItem C:\Windows | Select-Object -First 5
 shell -- -CommandThatStartsWithDash
+```
+
+### `start`
+
+```text
+start <program|script|document> [arguments...]
+```
+
+- 优先使用 `CreateProcessW` 直接启动，不依赖 `cmd.exe`、PowerShell 或 Shell 关联来处理普通程序。
+- `.exe` / `.com` / `.scr` / 无扩展名目标直接创建进程；`.ps1` 直接调用 `powershell.exe -File`；`.bat` / `.cmd` 使用 `cmd.exe`；`.vbs` / `.js` 使用 `wscript.exe`。
+- 文档、URL 和其他关联类型回退到 `ShellExecuteExW`。
+- 目标和后续参数保持原始文本传递；带空格的路径使用双引号。
+- 默认异步启动并立即返回，SCT 的命令管线和取消流程保持正常；子进程独立运行，不占用 SCT 输出管道。
+- 禁用或拦截 `cmd.exe` 不会影响 `.exe` 和 `.ps1` 的启动；`.bat` / `.cmd` 本身依赖 `cmd.exe`，无法绕过。
+- 启动失败时输出 Windows 错误码。
+
+示例：
+
+```text
+start notepad
+start "C:\Program Files\App\app.exe" --flag value
+start C:\path\install.cmd /quiet
+start https://example.com/
 ```
 
 ### `protect`
@@ -590,7 +615,7 @@ x86：
 
 构建脚本会自动：
 
-- 生成 `release/SCT64.exe`（x64）或 `release/SCT32.exe`（x86）
+- 生成 `release/normal/SCT64.exe`（x64）或 `release/normal/SCT32.exe`（x86）；使用 `-RandomTitle` 时改为 `release/random/`
 - 使用 `windres` 编译 `icon/` 下对应架构的图标资源并链接到程序
 - 编译根目录 `*.cpp`
 - 编译 `commands/*.cpp`
@@ -598,7 +623,7 @@ x86：
 - 将项目根路径映射为 `.`，避免调试信息写入项目绝对路径
 - 将编译器所在目录临时置于 `PATH` 前面，避免加载错误架构的 MSYS2 运行库
 - 复制 NSudo 运行时
-- 生成 `release/SCT_<arch>.zip`；`-Arch all -Zip` 还会同时生成 `SCT_x64.zip`、`SCT_x86.zip` 和 `SCT_all.zip`
+- 生成 `release/<normal|random>/SCT_<arch>.zip`；`-Arch all -Zip` 还会同时生成 `SCT_x64.zip`、`SCT_x86.zip` 和 `SCT_all.zip`
 
 ### VS Code 调试
 
@@ -765,3 +790,5 @@ static const std::vector<std::string> pins = {
 ### 15.5 构建
 
 构建脚本使用 `-mwindows` 生成 GUI 子系统程序，并对所有 C/C++ 源文件和头文件计算 SHA-256，再取 CRC32 作为 8 位十六进制 `SCT_BUILD_NUMBER`，版本格式为 `x.y.z-build`。同一份代码会得到相同构建 ID。发布包仍包含 `--console` 入口和 PPL helper 模式。
+
+- `-RandomTitle` 定义 `SCT_RANDOM_TITLE`：每次启动生成 16 位字母数字随机标题，GUI 窗口与 `--console` 控制台共用该标题；可执行文件名仍为 `SCT64.exe` / `SCT32.exe`，产物输出到项目根目录的 `release/random/`；普通发布输出到 `release/normal/`。

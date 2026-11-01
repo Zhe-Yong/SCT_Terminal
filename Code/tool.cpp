@@ -30,6 +30,41 @@ std::string get_uuid_v4() {
     return oss.str();
 }
 
+#ifdef SCT_RANDOM_TITLE
+namespace {
+
+std::wstring make_random_app_title() {
+    constexpr wchar_t alphabet[] =
+        L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    constexpr size_t alphabet_size = std::size(alphabet) - 1;
+    unsigned char bytes[16]{};
+    if (BCryptGenRandom(nullptr, bytes, static_cast<ULONG>(sizeof(bytes)),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        std::random_device random;
+        for (unsigned char& value : bytes) {
+            value = static_cast<unsigned char>(random());
+        }
+    }
+
+    wchar_t title[17]{};
+    for (size_t index = 0; index < std::size(bytes); ++index) {
+        title[index] = alphabet[bytes[index] % alphabet_size];
+    }
+    return std::wstring(title, std::size(bytes));
+}
+
+}
+#endif
+
+const std::wstring& get_app_title() {
+#ifdef SCT_RANDOM_TITLE
+    static const std::wstring title = make_random_app_title();
+#else
+    static const std::wstring title = L"SuperCommandTerminal";
+#endif
+    return title;
+}
+
 std::string wide_to_utf8(const std::wstring& text) {
     if (text.empty()) return {};
     int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), (int)text.size(),
@@ -245,5 +280,5 @@ void setup_console() {
         SetConsoleMode(input, input_mode | ENABLE_PROCESSED_INPUT);
     }
 
-    SetConsoleTitleW(L"SuperCommandTerminal");
+    SetConsoleTitleW(get_app_title().c_str());
 }

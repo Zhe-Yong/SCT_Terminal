@@ -5,6 +5,7 @@
 
 std::string unix2time(time_t unix_time);
 std::string get_uuid_v4();
+const std::wstring& get_app_title();
 
 std::string wide_to_utf8(const std::wstring& text);
 std::wstring utf8_to_wide(const std::string& text);

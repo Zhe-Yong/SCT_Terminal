@@ -4,7 +4,10 @@
 # Debug build output
 /Code/build/
 
-# Not official release build output
-/Code/release/
+# Release output (normal/ and random/)
+/release/
+
+# Stray generated output at the repository root
+/build/
 
 .vscode

@@ -614,7 +614,7 @@ bool Terminal::Impl::create_window(std::string& error) {
     }
 
     hwnd = CreateWindowExW(
-        0, L"SCTTerminalWindow", L"SuperCommandTerminal",
+        0, L"SCTTerminalWindow", get_app_title().c_str(),
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700, nullptr,
         nullptr, instance, this);
     if (!hwnd) {

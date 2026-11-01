@@ -5,6 +5,8 @@ param(
 
     [switch]$Zip,
 
+    [switch]$RandomTitle,
+
     [string]$X64Compiler = $env:SCT_X64_COMPILER,
 
     [string]$X86Compiler = $env:SCT_X86_COMPILER
@@ -15,7 +17,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'build-common.ps1')
 
 $root = Split-Path -Parent $PSScriptRoot
-$release = Join-Path $root 'release'
+$projectRoot = Split-Path -Parent $root
+$releaseRoot = Join-Path $projectRoot 'release'
+$variant = if ($RandomTitle) { 'random' } else { 'normal' }
+$release = Join-Path $releaseRoot $variant
 $buildId = Get-ProjectBuildId -Root $root
 New-Item -ItemType Directory -Force -Path $release | Out-Null
 
@@ -56,14 +61,19 @@ function Invoke-Build {
         -TargetArch $TargetArch `
         -OutputDirectory (Join-Path $root ("build\obj\{0}" -f $TargetArch))
 
+    $defines = @(('-DSCT_BUILD_NUMBER={0}' -f $buildId))
+    if ($RandomTitle) {
+        $defines += '-DSCT_RANDOM_TITLE'
+    }
+
     $arguments = @(
         '-fdiagnostics-color=always',
         '-std=c++17',
         '-O2',
         '-s',
         '-static',
-        '-mwindows',
-        ('-DSCT_BUILD_NUMBER={0}' -f $buildId),
+        '-mwindows'
+    ) + $defines + @(
         '-I', '.'
     ) + @(Get-ProjectPrefixMapArguments -Root $root) + $sources + @(
         $iconResource,
@@ -79,7 +89,8 @@ function Invoke-Build {
         '-lversion'
     )
 
-    Write-Host ("Building {0} -> {1}" -f $TargetArch, $info.Output)
+    $variantLabel = if ($RandomTitle) { ' random-title' } else { '' }
+    Write-Host ("Building {0}{1} -> {2}" -f $TargetArch, $variantLabel, $info.Output)
     Push-Location $root
     try {
         $exitCode = Invoke-BuildCompiler -Compiler $compiler -Arguments $arguments

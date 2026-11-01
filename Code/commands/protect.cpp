@@ -62,6 +62,7 @@ int handle_keep(CommandContext& context, size_t index) {
               "Keep protection enabled: close requests are blocked. "
               "Use the exit command to quit.\n",
               CLR_BrightGreen);
+        terminal().refresh_title_bar();
         return ERR_NONE;
     }
 
@@ -72,6 +73,7 @@ int handle_keep(CommandContext& context, size_t index) {
         return ERR_UNKNOWN;
     }
     print(context.out, "Keep protection disabled.\n", CLR_BrightGreen);
+    terminal().refresh_title_bar();
     return ERR_NONE;
 }
 
@@ -210,7 +212,8 @@ const CommandRegistration register_protect_command(
     make_protect_schema(), handle_protect, 0,
     "Usage: protect ppl on [TYPE] | protect ppl off\n"
     "       protect keep [on|1|off|0]\n"
-    "protect keep enables a process DACL that denies termination and blocks "
-    "close requests; use the exit command to quit.");
+    "protect keep denies taskkill -f through a process DACL and blocks the "
+    "close button/Alt+F4; external close requests restart a protected SCT. "
+    "Use the exit command to quit.");
 
 }

@@ -94,7 +94,7 @@
                   },
                   {
                       "type":  "shell",
-                      "label":  "C/C++: Build SCT x64 + x86 random-title release",
+                      "label":  "C/C++: Build SCT x64 + x86 random release",
                       "command":  "powershell.exe",
                       "args":  [
                                    "-NoProfile",
@@ -114,7 +114,7 @@
                                              "$gcc"
                                          ],
                       "group":  "build",
-                      "detail":  "Build both architectures with random 16-character titles into release/random."
+                      "detail":  "Build both architectures with random 16-character titles and runtime image names into release/random."
                   }
               ],
     "version":  "2.0.0"

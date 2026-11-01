@@ -27,6 +27,7 @@
 #include "version.h"
 #include "color_print.h"
 #include "tool.h"
+#include "runtime.h"
 #include "error_code.h"
 #include "command.h"
 #include "elevation.h"

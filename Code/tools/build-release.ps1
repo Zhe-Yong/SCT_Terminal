@@ -64,6 +64,7 @@ function Invoke-Build {
     $defines = @(('-DSCT_BUILD_NUMBER={0}' -f $buildId))
     if ($RandomTitle) {
         $defines += '-DSCT_RANDOM_TITLE'
+        $defines += '-DSCT_RANDOM_IMAGE'
     }
 
     $arguments = @(
@@ -89,7 +90,7 @@ function Invoke-Build {
         '-lversion'
     )
 
-    $variantLabel = if ($RandomTitle) { ' random-title' } else { '' }
+    $variantLabel = if ($RandomTitle) { ' random' } else { '' }
     Write-Host ("Building {0}{1} -> {2}" -f $TargetArch, $variantLabel, $info.Output)
     Push-Location $root
     try {

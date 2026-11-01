@@ -10,6 +10,7 @@ constexpr UINT WM_TERMINAL_UPDATE = WM_APP + 1;
 constexpr UINT WM_TERMINAL_CLEAR = WM_APP + 2;
 constexpr UINT WM_TERMINAL_TITLE = WM_APP + 3;
 constexpr UINT WM_TERMINAL_BEGIN_INPUT = WM_APP + 4;
+constexpr UINT WM_TERMINAL_REFRESH_CAPTION = WM_APP + 5;
 
 constexpr int kDefaultFontPointSize = 12;
 constexpr int kMinFontPointSize = 6;
@@ -330,11 +331,13 @@ private:
 struct Terminal::Impl {
     HWND hwnd = nullptr;
     HWND output = nullptr;
+    WPARAM message_token = 0;
     HANDLE ready_event = nullptr;
     std::thread ui_thread;
     DWORD ui_thread_id = 0;
     std::atomic<bool> gui_active{false};
     std::atomic<bool> shutting_down{false};
+    std::atomic<bool> system_shutdown{false};
     std::mutex mutex;
     std::condition_variable condition;
     std::string pending_line;
@@ -383,7 +386,8 @@ struct Terminal::Impl {
     void replace_input(const std::wstring& text);
     void history_move(int direction);
     void drain();
-    void close_window();
+    void close_window(bool external);
+    bool restart_protected_instance();
     void append_run(const TerminalRun& run);
     void set_font_point_size(int point_size);
     void zoom_from_wheel(int delta);
@@ -408,6 +412,11 @@ bool Terminal::Impl::start(std::string& error) {
     }
 
     SetProcessDPIAware();
+
+    std::random_device random_device;
+    std::mt19937_64 generator(random_device());
+    message_token = static_cast<WPARAM>(generator());
+    if (message_token == 0) message_token = 1;
 
     ready_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!ready_event) {
@@ -522,7 +531,7 @@ void Terminal::Impl::write_utf8(const char* data, size_t length) {
         }
         post = !pending_runs.empty() || pending_clear;
     }
-    if (post) PostMessageW(hwnd, WM_TERMINAL_UPDATE, 0, 0);
+    if (post) PostMessageW(hwnd, WM_TERMINAL_UPDATE, message_token, 0);
 }
 
 void Terminal::Impl::clear() {
@@ -533,12 +542,12 @@ void Terminal::Impl::clear() {
         pending_clear = true;
         parser.reset();
     }
-    PostMessageW(hwnd, WM_TERMINAL_CLEAR, 0, 0);
+    PostMessageW(hwnd, WM_TERMINAL_CLEAR, message_token, 0);
 }
 
 ReadLineResult Terminal::Impl::read_line(std::string& line) {
     if (hwnd && gui_active.load()) {
-        SendMessageW(hwnd, WM_TERMINAL_BEGIN_INPUT, 0, 0);
+        SendMessageW(hwnd, WM_TERMINAL_BEGIN_INPUT, message_token, 0);
     }
 
     std::unique_lock<std::mutex> lock(mutex);
@@ -693,8 +702,9 @@ void Terminal::Impl::caption_rects(RECT& caption, RECT buttons[3],
     ClientToScreen(hwnd, &origin);
 
     int caption_height = GetSystemMetrics(SM_CYCAPTION);
-    int button_width = GetSystemMetrics(SM_CXSIZE);
     int button_height = GetSystemMetrics(SM_CYSIZE);
+    int button_width = IsZoomed(hwnd) ? GetSystemMetrics(SM_CXSIZE)
+                                      : button_height;
 
     caption.left = origin.x;
     caption.right = origin.x + client.right - client.left;
@@ -722,6 +732,7 @@ int Terminal::Impl::caption_button_from_point(POINT point) const {
     RECT icon{};
     caption_rects(caption, buttons, icon);
     for (int index = 0; index < 3; ++index) {
+        if (index == 2 && keep_protection_enabled()) return -1;
         if (PtInRect(&buttons[index], point)) return index;
     }
     return -1;
@@ -794,6 +805,7 @@ void Terminal::Impl::paint_window_caption() {
     }
 
     bool maximized = IsZoomed(hwnd) != FALSE;
+    bool keep_enabled = keep_protection_enabled();
     for (int index = 0; index < 3; ++index) {
         UINT state = 0;
         if (index == 0) {
@@ -804,7 +816,11 @@ void Terminal::Impl::paint_window_caption() {
             state |= DFCS_CAPTIONCLOSE;
         }
         if (!active) state |= DFCS_INACTIVE;
-        if (caption_hot == index) state |= DFCS_HOT;
+        if (index == 2 && keep_enabled) {
+            state |= DFCS_INACTIVE;
+        } else if (caption_hot == index) {
+            state |= DFCS_HOT;
+        }
         DrawFrameControl(dc, &buttons[index], DFC_CAPTION, state);
     }
 
@@ -1055,11 +1071,74 @@ void Terminal::Impl::zoom_from_wheel(int delta) {
     set_font_point_size(font_point_size + steps);
 }
 
-void Terminal::Impl::close_window() {
-    if (keep_protection_enabled() && !shutting_down.load()) {
-        std::cout << "\nProtected: type 'exit' to close SCT.\n";
-        std::cout.flush();
-        return;
+bool Terminal::Impl::restart_protected_instance() {
+    std::string module_path = get_module_path();
+    if (module_path.empty()) return false;
+
+    std::string resource_directory = get_resource_directory();
+    std::string current_directory = get_current_directory();
+    std::wstring executable = utf8_to_wide(module_path);
+    std::wstring working_directory = utf8_to_wide(current_directory);
+
+    std::wstring command = quote_wide_arg(executable);
+    if (!resource_directory.empty()) {
+        command += L" --sct-resource-dir ";
+        command += quote_wide_arg(utf8_to_wide(resource_directory));
+    }
+    if (!working_directory.empty()) {
+        command += L" --sct-cwd ";
+        command += quote_wide_arg(working_directory);
+    }
+    command += L" --sct-run-command ";
+    command += quote_wide_arg(L"protect keep");
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+
+    DWORD flags = CREATE_BREAKAWAY_FROM_JOB;
+    BOOL created = CreateProcessW(
+        executable.c_str(), command.data(), nullptr, nullptr, FALSE, flags,
+        nullptr, working_directory.empty() ? nullptr : working_directory.c_str(),
+        &startup, &process);
+    if (!created && GetLastError() == ERROR_ACCESS_DENIED) {
+        created = CreateProcessW(
+            executable.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
+            nullptr,
+            working_directory.empty() ? nullptr : working_directory.c_str(),
+            &startup, &process);
+    }
+    if (!created) return false;
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
+void Terminal::Impl::close_window(bool external) {
+    if (keep_protection_enabled() && !shutting_down.load() &&
+        !system_shutdown.load()) {
+        if (!external || !restart_protected_instance()) {
+            bool waiting_for_input = input_active;
+            if (waiting_for_input) {
+                clear_input();
+                input_active = false;
+            }
+
+            std::cout << "\nProtected: type 'exit' to close SCT.\n";
+            std::cout.flush();
+            drain();
+
+            if (waiting_for_input) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    pending_line.clear();
+                    line_ready = true;
+                }
+                condition.notify_one();
+            }
+            return;
+        }
     }
 
     request_command_cancel();
@@ -1090,13 +1169,13 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
         case WM_SYSKEYDOWN:
             if (self && wparam == VK_F4 &&
                 (lparam & (1 << 29)) != 0) {
-                self->close_window();
+                self->close_window(false);
                 return 0;
             }
             break;
         case WM_SYSCOMMAND:
             if (self && (wparam & 0xFFF0) == SC_CLOSE) {
-                self->close_window();
+                self->close_window(false);
                 return 0;
             }
             break;
@@ -1121,6 +1200,7 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                     if (PtInRect(&buttons[index], point)) {
                         if (index == 0) return HTMINBUTTON;
                         if (index == 1) return HTMAXBUTTON;
+                        if (keep_protection_enabled()) return HTCAPTION;
                         return HTCLOSE;
                     }
                 }
@@ -1168,7 +1248,9 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                     return 0;
                 }
                 if (wparam == HTCLOSE) {
-                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    if (!keep_protection_enabled()) {
+                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    }
                     return 0;
                 }
             }
@@ -1200,9 +1282,22 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                 return reinterpret_cast<LRESULT>(self->background);
             }
             break;
+        case WM_QUERYENDSESSION:
+            if (self) self->system_shutdown.store(true);
+            return TRUE;
+        case WM_ENDSESSION:
+            if (self) {
+                if (wparam) {
+                    self->system_shutdown.store(true);
+                    self->close_window(false);
+                } else {
+                    self->system_shutdown.store(false);
+                }
+            }
+            return 0;
         case WM_CLOSE:
             if (self) {
-                self->close_window();
+                self->close_window(true);
                 return 0;
             }
             break;
@@ -1210,19 +1305,25 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             PostQuitMessage(0);
             return 0;
         case WM_TERMINAL_UPDATE:
-            if (self) self->drain();
+            if (self && wparam == self->message_token) self->drain();
             return 0;
         case WM_TERMINAL_CLEAR:
-            if (self) {
+            if (self && wparam == self->message_token) {
                 SetWindowTextW(self->output, L"");
                 self->input_start = 0;
                 InvalidateRect(self->output, nullptr, TRUE);
             }
             return 0;
         case WM_TERMINAL_BEGIN_INPUT:
-            if (self) self->begin_input();
+            if (self && wparam == self->message_token) self->begin_input();
             return 0;
         case WM_TERMINAL_TITLE:
+            return 0;
+        case WM_TERMINAL_REFRESH_CAPTION:
+            if (self && wparam == self->message_token) {
+                self->caption_hot = -1;
+                self->paint_window_caption();
+            }
             return 0;
         case WM_MOUSEWHEEL:
             if (self && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
@@ -1413,6 +1514,12 @@ void Terminal::write_utf8(const char* data, size_t length) {
 
 void Terminal::clear() {
     impl_->clear();
+}
+
+void Terminal::refresh_title_bar() {
+    if (!impl_ || !impl_->hwnd) return;
+    PostMessageW(impl_->hwnd, WM_TERMINAL_REFRESH_CAPTION,
+                 impl_->message_token, 0);
 }
 
 Terminal& terminal() {

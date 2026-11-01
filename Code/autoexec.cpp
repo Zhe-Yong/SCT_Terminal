@@ -17,7 +17,7 @@ bool file_exists(const std::wstring& path) {
 std::wstring find_autoexec_path() {
     std::vector<std::wstring> candidates;
 
-    std::string directory = get_module_directory();
+    std::string directory = get_resource_directory();
     if (!directory.empty()) {
         candidates.push_back(utf8_to_wide(directory) + L"\\autoexec.sct");
     }

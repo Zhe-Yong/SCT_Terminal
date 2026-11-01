@@ -59,11 +59,9 @@ BOOL CALLBACK find_new_sct_window(HWND window, LPARAM parameter) {
     return FALSE;
 }
 
-std::wstring nsudo_launcher_path(const std::string& executable) {
-    size_t separator = executable.find_last_of("\\/");
-    std::string directory = separator == std::string::npos
-                                ? "."
-                                : executable.substr(0, separator);
+std::wstring nsudo_launcher_path() {
+    std::string directory = get_resource_directory();
+    if (directory.empty()) directory = get_module_directory();
 #ifdef _WIN64
     std::string path = directory + "\\NSudo\\x64\\NSudo64.exe";
 #else
@@ -280,8 +278,12 @@ bool launch_elevated_self(ElevationMode mode,
 
     std::wstring executable_wide = utf8_to_wide(executable);
     std::wstring cwd_wide = utf8_to_wide(cwd);
+    std::string resource_directory = get_resource_directory();
+    if (resource_directory.empty()) resource_directory = get_module_directory();
     std::wstring parameters =
-        L"--sct-cwd " + quote_wide_arg(cwd_wide);
+        L"--sct-cwd " + quote_wide_arg(cwd_wide) +
+        L" --sct-resource-dir " +
+        quote_wide_arg(utf8_to_wide(resource_directory));
     if (!command_line.empty()) {
         parameters += L" --sct-run-command " +
                       quote_wide_arg(utf8_to_wide(command_line));
@@ -292,7 +294,7 @@ bool launch_elevated_self(ElevationMode mode,
                                      cwd_wide, true, true, error);
     }
 
-    std::wstring nsudo_path = nsudo_launcher_path(executable);
+    std::wstring nsudo_path = nsudo_launcher_path();
     if (!file_exists(nsudo_path)) {
         error = "NSudo launcher not found: " + wide_to_utf8(nsudo_path);
         return false;
@@ -327,7 +329,13 @@ bool relaunch_as_user(std::string& error) {
 
     std::string cwd = get_current_directory();
     if (cwd.empty()) cwd = ".";
-    return shell_execute_process(L"explorer.exe",
-                                 quote_wide_arg(utf8_to_wide(executable)),
+    std::string resource_directory = get_resource_directory();
+    if (resource_directory.empty()) resource_directory = get_module_directory();
+    std::wstring parameters =
+        quote_wide_arg(utf8_to_wide(executable)) +
+        L" --sct-cwd " + quote_wide_arg(utf8_to_wide(cwd)) +
+        L" --sct-resource-dir " +
+        quote_wide_arg(utf8_to_wide(resource_directory));
+    return shell_execute_process(L"explorer.exe", parameters,
                                  utf8_to_wide(cwd), false, true, error);
 }

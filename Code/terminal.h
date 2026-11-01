@@ -12,6 +12,7 @@ public:
     ReadLineResult read_line(std::string& line);
     void write_utf8(const char* data, size_t length);
     void clear();
+    void refresh_title_bar();
 
 private:
     struct Impl;

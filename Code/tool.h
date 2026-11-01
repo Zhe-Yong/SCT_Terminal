@@ -5,6 +5,7 @@
 
 std::string unix2time(time_t unix_time);
 std::string get_uuid_v4();
+std::string get_random_identifier(size_t length);
 const std::wstring& get_app_title();
 
 std::string wide_to_utf8(const std::wstring& text);
@@ -15,6 +16,7 @@ std::string get_current_directory();
 bool set_current_directory(const std::string& path);
 std::string get_module_path();
 std::string get_module_directory();
+std::string get_resource_directory();
 std::string get_current_user_name();
 std::string format_win32_error(DWORD code);
 

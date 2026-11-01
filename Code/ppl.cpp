@@ -18,13 +18,8 @@ bool file_exists(const std::wstring& path) {
            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-std::wstring module_directory() {
-    std::string module_path = get_module_path();
-    if (module_path.empty()) return {};
-
-    size_t separator = module_path.find_last_of("\\/");
-    std::string directory =
-        separator == std::string::npos ? "." : module_path.substr(0, separator);
+std::wstring resource_directory() {
+    std::string directory = get_resource_directory();
     return utf8_to_wide(directory);
 }
 
@@ -37,7 +32,7 @@ std::string ppl_default_type() {
 }
 
 std::string ppl_dll_path() {
-    std::wstring directory = module_directory();
+    std::wstring directory = resource_directory();
     if (directory.empty()) return {};
 
     std::wstring name = ppl_dll_name();

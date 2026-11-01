@@ -25,10 +25,19 @@
 - 修复：自绘最小化/最大化/还原/关闭按钮改为直接处理鼠标点击，并在窗口状态变化后立即重绘按钮图标。
 - 调整：GUI 右侧滚动条禁用视觉主题，改为 Windows Basic/经典样式。
 - 修复：关闭按钮、`Alt+F4`、`WM_CLOSE` 和 `WM_SYSCOMMAND SC_CLOSE` 统一走程序关闭流程，正在运行的命令会被取消后再退出。
-- 调整：`taskkill` 对 SCT 目标只发送 `WM_CLOSE`，由 SCT 自行关闭；对 SCT 目标使用 `-f` 返回访问拒绝。
+- 调整：`taskkill` 不加 `-f` 时优先发送 `WM_CLOSE`，无窗口时发送 `WM_QUIT`；`-f` 使用 `TerminateProcess`，不按 SCT 映像名或窗口类特殊处理。
 - 调整：原 `ppl` 命令移动到 `protect ppl on/off`。
-- 新增：`protect keep [on|1|off|0]` 为当前进程注册拒绝终止的 DACL；开启后关闭请求被阻止，只能输入 `exit` 退出。
+- 新增：`protect keep [on|1|off|0]` 为当前进程注册拒绝终止的 DACL；开启后关闭按钮和 Alt+F4 被阻止，任务管理器等外部关闭请求会重启受保护实例，`taskkill -f` 被拒绝，使用 `exit` 退出。
 - 改进：`protect ppl on` 失败时显示驱动安装错误、易受攻击驱动黑名单状态，并在 32 位 SCT 运行于 64 位 Windows 时直接提示不支持。
 - 新增：`start <program|script|document> [arguments...]`；程序和脚本优先用 `CreateProcessW` 直接启动，文档/URL 回退 `ShellExecuteExW`，保留原始参数并异步独立运行。
 - 新增：README.md
 - 新增：`build-release.ps1 -RandomTitle` 随机标题发布变体，每次启动生成 16 位字母数字标题，输出到项目根目录 `release/random/`，普通发布输出到 `release/normal/`，文件名仍为 `SCT64.exe` / `SCT32.exe`。
+- Add: the random build copies itself to %LOCALAPPDATA%\SCT\runtime\<16-random>.exe (no SCT prefix), launches the child, and exits the parent; old copies are cleaned on the next launch.
+- Fix: the random build loads plugins, autoexec.sct, NSudo, and PPL DLLs from the original release folder.
+- Improve: with protect keep enabled, the caption close button and Alt+F4 are blocked; external close requests restart a protected instance instead of hanging, and taskkill -f is denied by the process DACL.
+- Fix: the protected-close message no longer becomes console input; it refreshes and prints a new prompt.
+- Improve: internal WM_TERMINAL_* messages require a per-process random token; external messages are ignored.
+
+## 2026.11.01
+- 文档：将 `ADD_COMMAND.md` 和 `CHANGELOG.md` 移动到项目根目录。
+- 文档：新增 `DLL.md`，说明 DLL 插件的 ABI、导出函数、命令描述符、Host API、构建、启用和签名规范。

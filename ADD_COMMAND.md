@@ -54,8 +54,9 @@ Code/
 │   ├── build-common.ps1  工具链解析、源文件收集和路径映射
 │   ├── build-release.ps1 自动编译根目录和 commands/ 下的 .cpp
 │   └── build-debug.ps1   生成 build/debug/SCT64.exe 供 VS Code 调试
-└── ADD_COMMAND.md        本说明
 ```
+
+根目录还包含 `ADD_COMMAND.md`（本说明）、`CHANGELOG.md`（变更记录）和 `DLL.md`（DLL 插件编写规范）。
 
 新增命令不需要修改 `command.cpp`、`app.cpp` 或任何中央注册函数。
 
@@ -469,7 +470,7 @@ protect keep [on|1|off|0]
 - 如果 `off` 的 `unprotect` 失败，会保留驱动以便重试，不会进入无法恢复的保护状态。
 - `protect ppl` 要求 Administrator 权限，并且必须在已提升的主 SCT 进程中执行；可先执行 `sudo ad` / `sudo sys` / `sudo su` 重启 SCT。
 - `protect keep` 默认开启；`protect keep on` / `1` 开启，`protect keep off` / `0` 关闭。
-- 开启 keep 后会为当前进程注册拒绝 `PROCESS_TERMINATE` 的 DACL，关闭按钮、Alt+F4、`WM_CLOSE` 和 `taskkill` 都无法关闭 SCT；只能输入 `exit` 命令退出。
+- When keep is enabled, the caption close button and Alt+F4 are blocked; an external close request such as Task Manager restarts a protected SCT instance instead of hanging, and taskkill -f is denied by the process DACL; use the exit command to quit.
 - `protect keep off` 会恢复原始进程 DACL，之后可以正常关闭。
 
 ### `taskkill`
@@ -488,10 +489,8 @@ taskkill [-f] [-t] (-im <imagename> | -pid <processid>)
 行为说明：
 
 - `-im` 和 `-pid` 不能同时使用。
-- 不加 `-f` 时向目标窗口发送 `WM_CLOSE`，并向非 SCT 目标线程补发 `WM_QUIT`。
-- SCT 目标只接收 `WM_CLOSE`，由 SCT 自行取消正在运行的命令并退出。
-- 对 SCT 目标使用 `-f` 会返回访问拒绝；请改用不带 `-f` 的 `taskkill` 请求正常关闭。
-- 对非 SCT 目标加 `-f` 时使用 `TerminateProcess` 强制终止。
+- 不加 `-f` 时优先向目标窗口发送 `WM_CLOSE`；没有可发送窗口时向目标线程发送 `WM_QUIT`。
+- 加 `-f` 时使用 `TerminateProcess` 强制终止，不按映像名或窗口类做特殊处理。
 - 使用 SCT 当前进程令牌执行，不提升权限，也不会弹出 UAC。
 - 不调用 `cmd.exe` 或其他 shell，直接使用 Win32 进程和线程 API。
 - 使用当前用户权限无法访问的进程会返回权限错误。
@@ -747,6 +746,7 @@ version [self|DLL_NAME]
 ```
 
 - 插件放在程序目录的 `plugin\x64\*.dll` 或 `plugin\x86\*.dll`。
+- DLL 插件的 ABI、导出函数、命令描述符、构建和签名规范见根目录 `DLL.md`。
 - `plugin -list` 显示 `dll_ver`、文件 SHA-256、签名者、SPKI SHA-256 和信任状态。
 - `version` 或 `version self` 显示 SCT 自身版本、构建 ID 和架构；`version <DLL_NAME>` 查询插件 DLL 的 `dll_ver`。
 - 插件可在 DLL 中导出 `sct_plugin_dll_ver` 返回版本字符串；未导出时回退到 DLL 的 `FileVersion` 资源。
@@ -778,7 +778,9 @@ static const std::vector<std::string> pins = {
 - 标题栏使用自绘的 Windows Basic 风格：隐藏系统默认的最小化、最大化、关闭按钮，重新绘制图标、标题和按钮；拖动、双击最大化、缩放和系统菜单继续由系统处理。
 - 标题栏按客户区原点计算并裁剪绘制区域，窗口移动、最大化、缩放和 DPI 变化时按钮位置与指针命中区域保持一致；最小化、最大化/还原和关闭按钮直接处理点击，并在状态变化后重绘。
 - 右侧滚动条通过 `SetWindowTheme(output, L"", L"")` 禁用视觉主题，保持 Windows Basic/经典样式。
-- 关闭按钮、`Alt+F4`、`WM_SYSCOMMAND SC_CLOSE` 和外部 `WM_CLOSE` 都走程序的关闭流程：取消正在运行的命令、唤醒输入等待并退出进程。
+- 关闭按钮、`Alt+F4`、`WM_SYSCOMMAND SC_CLOSE` 和外部 `WM_CLOSE` 都走统一关闭流程；开启 `protect keep` 时关闭按钮和 `Alt+F4` 被阻止，外部 `WM_CLOSE` 会重启受保护实例，其他情况取消命令并退出。
+- 窗口内部 `WM_TERMINAL_*` 消息使用启动时生成的随机令牌校验，外部进程伪造的消息会被忽略；`--sct-run-command` 只在启动新进程时生效，不会向已运行实例注入命令。
+- `--console` 模式遵循标准控制台语义；同会话进程若获得控制台输入句柄，仍可通过 `WriteConsoleInput` 注入按键，这类输入无法与真实用户输入区分。
 - 使用 `SCT64.exe --console`（x86 为 `SCT32.exe --console`）强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。
 - GUI 中 `shell` 默认捕获输出并显示在终端内；`shell -window`（或 `-w`）让子进程使用独立窗口，`-hide`（或 `-h`）保持隐藏。
 - GUI 使用单个 RichEdit 控件，输入直接显示在提示符后，支持 ANSI SGR 颜色、清屏、历史记录、光标编辑和 Ctrl+C 取消当前输入/命令。
@@ -791,4 +793,4 @@ static const std::vector<std::string> pins = {
 
 构建脚本使用 `-mwindows` 生成 GUI 子系统程序，并对所有 C/C++ 源文件和头文件计算 SHA-256，再取 CRC32 作为 8 位十六进制 `SCT_BUILD_NUMBER`，版本格式为 `x.y.z-build`。同一份代码会得到相同构建 ID。发布包仍包含 `--console` 入口和 PPL helper 模式。
 
-- `-RandomTitle` 定义 `SCT_RANDOM_TITLE`：每次启动生成 16 位字母数字随机标题，GUI 窗口与 `--console` 控制台共用该标题；可执行文件名仍为 `SCT64.exe` / `SCT32.exe`，产物输出到项目根目录的 `release/random/`；普通发布输出到 `release/normal/`。
+- `-RandomTitle` defines SCT_RANDOM_TITLE and SCT_RANDOM_IMAGE: each launch gets a 16-character random title; the random build starts as SCT64.exe / SCT32.exe, copies itself to %LOCALAPPDATA%\SCT\runtime\<16-random>.exe (no SCT prefix), launches the child, and exits the parent. Plugins, autoexec.sct, NSudo, and PPL DLLs are read from release/random/; old copies are cleaned on the next launch.

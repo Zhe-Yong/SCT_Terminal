@@ -30,15 +30,15 @@ std::string get_uuid_v4() {
     return oss.str();
 }
 
-#ifdef SCT_RANDOM_TITLE
-namespace {
+std::string get_random_identifier(size_t length) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    constexpr size_t alphabet_size = sizeof(alphabet) - 1;
+    if (length == 0) return {};
 
-std::wstring make_random_app_title() {
-    constexpr wchar_t alphabet[] =
-        L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    constexpr size_t alphabet_size = std::size(alphabet) - 1;
-    unsigned char bytes[16]{};
-    if (BCryptGenRandom(nullptr, bytes, static_cast<ULONG>(sizeof(bytes)),
+    std::vector<unsigned char> bytes(length, 0);
+    if (BCryptGenRandom(nullptr, bytes.data(),
+                        static_cast<ULONG>(bytes.size()),
                         BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
         std::random_device random;
         for (unsigned char& value : bytes) {
@@ -46,11 +46,20 @@ std::wstring make_random_app_title() {
         }
     }
 
-    wchar_t title[17]{};
-    for (size_t index = 0; index < std::size(bytes); ++index) {
-        title[index] = alphabet[bytes[index] % alphabet_size];
+    std::string result;
+    result.reserve(length);
+    for (unsigned char value : bytes) {
+        result.push_back(alphabet[value % alphabet_size]);
     }
-    return std::wstring(title, std::size(bytes));
+    return result;
+}
+
+#ifdef SCT_RANDOM_TITLE
+namespace {
+
+std::wstring make_random_app_title() {
+    std::string identifier = get_random_identifier(16);
+    return std::wstring(identifier.begin(), identifier.end());
 }
 
 }
@@ -140,6 +149,20 @@ std::string get_module_directory() {
     if (path.empty()) return {};
     size_t separator = path.find_last_of("\\/");
     return separator == std::string::npos ? "." : path.substr(0, separator);
+}
+
+std::string get_resource_directory() {
+    static const std::string directory = [] {
+        wchar_t buffer[32768]{};
+        DWORD length = GetEnvironmentVariableW(
+            L"SCT_RESOURCE_DIR", buffer,
+            static_cast<DWORD>(std::size(buffer)));
+        if (length > 0 && length < std::size(buffer)) {
+            return wide_to_utf8(std::wstring(buffer, length));
+        }
+        return get_module_directory();
+    }();
+    return directory;
 }
 
 std::string get_current_user_name() {

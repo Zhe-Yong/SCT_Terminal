@@ -74,9 +74,24 @@ static void print_welcome() {
 
 int run_application() {
     vector<string> startup_args = get_command_line_args();
+    std::string resource_directory =
+        startup_value(startup_args, "--sct-resource-dir");
+    if (!resource_directory.empty()) {
+        SetEnvironmentVariableW(
+            L"SCT_RESOURCE_DIR",
+            utf8_to_wide(resource_directory).c_str());
+    }
+
     if (startup_args.size() >= 2 &&
         startup_args[1] == "--sct-ppl-helper") {
         return run_ppl_mode(startup_args);
+    }
+
+    std::string bootstrap_error;
+    RuntimeBootstrapResult bootstrap =
+        bootstrap_random_runtime(startup_args, bootstrap_error);
+    if (bootstrap == RuntimeBootstrapResult::Launched) {
+        return 0;
     }
 
     std::string startup_directory =
@@ -127,7 +142,7 @@ int run_application() {
     }
 
     std::string plugin_error;
-    if (!plugin_manager().initialize(get_module_directory(), plugin_error,
+    if (!plugin_manager().initialize(get_resource_directory(), plugin_error,
                                      true)) {
         print("Warning: plugin state is unavailable: " + plugin_error + "\n",
               CLR_BrightYellow);

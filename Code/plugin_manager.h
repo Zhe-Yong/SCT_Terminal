@@ -33,6 +33,7 @@ public:
                      std::string& error) const;
     std::vector<PluginInfo> list() const;
     bool initialized() const;
+    void notify_shutdown(unsigned reason);
     const std::string& state_path() const;
     const std::string& plugin_directory() const;
 

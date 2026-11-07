@@ -11,6 +11,13 @@ constexpr UINT WM_TERMINAL_CLEAR = WM_APP + 2;
 constexpr UINT WM_TERMINAL_TITLE = WM_APP + 3;
 constexpr UINT WM_TERMINAL_BEGIN_INPUT = WM_APP + 4;
 constexpr UINT WM_TERMINAL_REFRESH_CAPTION = WM_APP + 5;
+constexpr UINT WM_TERMINAL_SET_FRONT = WM_APP + 6;
+constexpr UINT WM_TERMINAL_REASSERT_FRONT = WM_APP + 7;
+
+constexpr UINT_PTR kFrontTimerId = 1;
+constexpr unsigned kFrontDefaultIntervalMs = 200;
+constexpr unsigned kFrontMinIntervalMs = 1;
+constexpr unsigned kFrontMaxIntervalMs = 2000;
 
 constexpr int kDefaultFontPointSize = 12;
 constexpr int kMinFontPointSize = 6;
@@ -52,6 +59,13 @@ struct TerminalRun {
     int fg = CLR_NONE;
     int bg = CLR_NONE;
     int style = 0;
+};
+
+struct FrontRequest {
+    bool enable = false;
+    unsigned interval_ms = 0;
+    bool ok = false;
+    std::string error;
 };
 
 COLORREF ansi_color(int code, bool background) {
@@ -338,6 +352,11 @@ struct Terminal::Impl {
     std::atomic<bool> gui_active{false};
     std::atomic<bool> shutting_down{false};
     std::atomic<bool> system_shutdown{false};
+    std::atomic<bool> front_enabled{false};
+    std::atomic<unsigned> front_interval_ms{kFrontDefaultIntervalMs};
+    UINT_PTR front_timer = 0;
+    HWINEVENTHOOK front_event_hook = nullptr;
+    bool front_raise_to_top = false;
     std::mutex mutex;
     std::condition_variable condition;
     std::string pending_line;
@@ -388,6 +407,11 @@ struct Terminal::Impl {
     void drain();
     void close_window(bool external);
     bool restart_protected_instance();
+    bool set_front_enabled(bool enable, unsigned interval_ms,
+                           std::string& error);
+    bool apply_front(bool enable, unsigned interval_ms, std::string& error);
+    void reassert_topmost();
+    void cleanup_front();
     void append_run(const TerminalRun& run);
     void set_font_point_size(int point_size);
     void zoom_from_wheel(int delta);
@@ -396,7 +420,13 @@ struct Terminal::Impl {
                                         WPARAM wparam, LPARAM lparam);
     static LRESULT CALLBACK editor_proc(HWND hwnd, UINT message,
                                         WPARAM wparam, LPARAM lparam);
+    static void CALLBACK front_event_proc(HWINEVENTHOOK hook, DWORD event,
+                                          HWND hwnd, LONG id_object,
+                                          LONG id_child, DWORD thread_id,
+                                          DWORD time);
 };
+
+static std::atomic<void*> front_event_owner{nullptr};
 
 bool Terminal::Impl::start(std::string& error) {
     if (gui_active.load()) return true;
@@ -476,7 +506,10 @@ bool Terminal::Impl::start(std::string& error) {
 }
 
 void Terminal::Impl::stop() {
-    if (!ui_thread.joinable()) return;
+    if (!ui_thread.joinable()) {
+        cleanup_front();
+        return;
+    }
 
     shutting_down.store(true);
     condition.notify_all();
@@ -489,6 +522,7 @@ void Terminal::Impl::stop() {
 
     ui_thread.join();
     gui_active.store(false);
+    cleanup_front();
 
     if (streams_redirected) {
         stream_buffer.set_sink({});
@@ -1071,6 +1105,150 @@ void Terminal::Impl::zoom_from_wheel(int delta) {
     set_font_point_size(font_point_size + steps);
 }
 
+bool Terminal::Impl::set_front_enabled(bool enable, unsigned interval_ms,
+                                       std::string& error) {
+    if (!hwnd || !gui_active.load()) {
+        error = "Front protection requires the GUI terminal.";
+        return false;
+    }
+
+    FrontRequest request;
+    request.enable = enable;
+    request.interval_ms = interval_ms;
+    SendMessageW(hwnd, WM_TERMINAL_SET_FRONT, message_token,
+                 reinterpret_cast<LPARAM>(&request));
+    if (!request.ok) {
+        error = request.error.empty()
+                    ? "Failed to update front protection."
+                    : request.error;
+        return false;
+    }
+    return true;
+}
+
+bool Terminal::Impl::apply_front(bool enable, unsigned interval_ms,
+                                 std::string& error) {
+    if (!hwnd) {
+        error = "Front protection requires the GUI terminal.";
+        return false;
+    }
+
+    if (enable) {
+        if (interval_ms < kFrontMinIntervalMs ||
+            interval_ms > kFrontMaxIntervalMs) {
+            error = "Front interval must be between 1 and 2000 ms.";
+            return false;
+        }
+
+        front_interval_ms.store(interval_ms);
+        front_enabled.store(true);
+        if (!SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                              SWP_NOOWNERZORDER)) {
+            DWORD code = GetLastError();
+            front_enabled.store(false);
+            error = "Failed to set the window topmost: " +
+                    format_win32_error(code);
+            return false;
+        }
+
+        if (front_timer) KillTimer(hwnd, front_timer);
+        front_timer =
+            SetTimer(hwnd, kFrontTimerId, interval_ms, nullptr);
+        if (!front_timer) {
+            DWORD code = GetLastError();
+            front_enabled.store(false);
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                             SWP_NOOWNERZORDER);
+            error = "Failed to start the front timer: " +
+                    format_win32_error(code);
+            return false;
+        }
+
+        if (!front_event_hook) {
+            front_event_owner.store(this);
+            front_event_hook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                &Terminal::Impl::front_event_proc, 0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+            if (!front_event_hook) front_event_owner.store(nullptr);
+        }
+        reassert_topmost();
+        return true;
+    }
+
+    front_enabled.store(false);
+    front_raise_to_top = false;
+    if (front_timer) {
+        KillTimer(hwnd, front_timer);
+        front_timer = 0;
+    }
+    if (front_event_hook) {
+        UnhookWinEvent(front_event_hook);
+        front_event_hook = nullptr;
+    }
+    if (front_event_owner.load() == this) front_event_owner.store(nullptr);
+
+    if (!SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                          SWP_NOOWNERZORDER)) {
+        DWORD code = GetLastError();
+        error = "Failed to clear the window topmost state: " +
+                format_win32_error(code);
+        return false;
+    }
+    return true;
+}
+
+void Terminal::Impl::reassert_topmost() {
+    if (!hwnd || !front_enabled.load()) return;
+    front_raise_to_top = true;
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                     SWP_NOOWNERZORDER);
+    front_raise_to_top = false;
+    if (!front_enabled.load()) {
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                         SWP_NOOWNERZORDER);
+    }
+}
+
+void Terminal::Impl::cleanup_front() {
+    front_enabled.store(false);
+    if (front_timer && hwnd) {
+        KillTimer(hwnd, front_timer);
+        front_timer = 0;
+    }
+    if (front_event_hook) {
+        UnhookWinEvent(front_event_hook);
+        front_event_hook = nullptr;
+    }
+    if (front_event_owner.load() == this) front_event_owner.store(nullptr);
+}
+
+void CALLBACK Terminal::Impl::front_event_proc(HWINEVENTHOOK hook,
+                                               DWORD event, HWND hwnd,
+                                               LONG id_object,
+                                               LONG id_child,
+                                               DWORD thread_id,
+                                               DWORD time) {
+    (void)hook;
+    (void)hwnd;
+    (void)thread_id;
+    (void)time;
+    if (event != EVENT_SYSTEM_FOREGROUND || id_object != OBJID_WINDOW ||
+        id_child != CHILDID_SELF) {
+        return;
+    }
+
+    Impl* self = static_cast<Impl*>(front_event_owner.load());
+    if (!self || !self->front_enabled.load() || !self->hwnd) return;
+    PostMessageW(self->hwnd, WM_TERMINAL_REASSERT_FRONT,
+                 self->message_token, 0);
+}
+
 bool Terminal::Impl::restart_protected_instance() {
     std::string module_path = get_module_path();
     if (module_path.empty()) return false;
@@ -1089,8 +1267,6 @@ bool Terminal::Impl::restart_protected_instance() {
         command += L" --sct-cwd ";
         command += quote_wide_arg(working_directory);
     }
-    command += L" --sct-run-command ";
-    command += quote_wide_arg(L"protect keep");
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -1116,6 +1292,7 @@ bool Terminal::Impl::restart_protected_instance() {
 }
 
 void Terminal::Impl::close_window(bool external) {
+    bool restarting = false;
     if (keep_protection_enabled() && !shutting_down.load() &&
         !system_shutdown.load()) {
         if (!external || !restart_protected_instance()) {
@@ -1139,6 +1316,13 @@ void Terminal::Impl::close_window(bool external) {
             }
             return;
         }
+        restarting = true;
+    }
+
+    if (system_shutdown.load()) {
+        plugin_manager().notify_shutdown(SCT_PLUGIN_SHUTDOWN_SYSTEM);
+    } else if (restarting) {
+        plugin_manager().notify_shutdown(SCT_PLUGIN_SHUTDOWN_RESTART);
     }
 
     request_command_cancel();
@@ -1160,12 +1344,27 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
     }
 
     switch (message) {
+        case WM_WINDOWPOSCHANGING:
+            if (self && self->front_enabled.load()) {
+                auto* position = reinterpret_cast<WINDOWPOS*>(lparam);
+                if (!self->front_raise_to_top) {
+                    position->hwndInsertAfter = HWND_TOPMOST;
+                }
+                position->flags &= ~SWP_NOZORDER;
+            }
+            break;
         case WM_SIZE:
             if (self) {
                 self->layout();
                 self->paint_window_caption();
             }
             return 0;
+        case WM_TIMER:
+            if (self && wparam == kFrontTimerId) {
+                self->reassert_topmost();
+                return 0;
+            }
+            break;
         case WM_SYSKEYDOWN:
             if (self && wparam == VK_F4 &&
                 (lparam & (1 << 29)) != 0) {
@@ -1302,6 +1501,7 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             }
             break;
         case WM_DESTROY:
+            if (self) self->cleanup_front();
             PostQuitMessage(0);
             return 0;
         case WM_TERMINAL_UPDATE:
@@ -1323,6 +1523,18 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             if (self && wparam == self->message_token) {
                 self->caption_hot = -1;
                 self->paint_window_caption();
+            }
+            return 0;
+        case WM_TERMINAL_SET_FRONT:
+            if (self && wparam == self->message_token && lparam) {
+                auto* request = reinterpret_cast<FrontRequest*>(lparam);
+                request->ok = self->apply_front(
+                    request->enable, request->interval_ms, request->error);
+            }
+            return 0;
+        case WM_TERMINAL_REASSERT_FRONT:
+            if (self && wparam == self->message_token) {
+                self->reassert_topmost();
             }
             return 0;
         case WM_MOUSEWHEEL:
@@ -1520,6 +1732,19 @@ void Terminal::refresh_title_bar() {
     if (!impl_ || !impl_->hwnd) return;
     PostMessageW(impl_->hwnd, WM_TERMINAL_REFRESH_CAPTION,
                  impl_->message_token, 0);
+}
+
+bool Terminal::set_front_enabled(bool enable, unsigned interval_ms,
+                                 std::string& error) {
+    return impl_->set_front_enabled(enable, interval_ms, error);
+}
+
+bool Terminal::front_enabled() const {
+    return impl_->front_enabled.load();
+}
+
+unsigned Terminal::front_interval_ms() const {
+    return impl_->front_interval_ms.load();
 }
 
 Terminal& terminal() {

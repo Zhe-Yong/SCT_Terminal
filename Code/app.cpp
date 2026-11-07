@@ -157,6 +157,7 @@ int run_application() {
     if (autoexec.exit_code != 0) {
         shutdown_command_cancellation();
         print_rst();
+        plugin_manager().notify_shutdown(SCT_PLUGIN_SHUTDOWN_EXIT);
         terminal().stop_gui();
         if (SUCCEEDED(com_result)) CoUninitialize();
         return autoexec.exit_code;
@@ -177,6 +178,7 @@ int run_application() {
 
     shutdown_command_cancellation();
     print_rst();
+    plugin_manager().notify_shutdown(SCT_PLUGIN_SHUTDOWN_EXIT);
     terminal().stop_gui();
 
     if (SUCCEEDED(com_result)) CoUninitialize();

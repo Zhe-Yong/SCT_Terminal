@@ -41,3 +41,9 @@
 ## 2026.11.01
 - 文档：将 `ADD_COMMAND.md` 和 `CHANGELOG.md` 移动到项目根目录。
 - 文档：新增 `DLL.md`，说明 DLL 插件的 ABI、导出函数、命令描述符、Host API、构建、启用和签名规范。
+
+## 2026.11.06
+- 新增：`protect front [on|1|off|0|1ms|2..2000]`，默认每 200ms 重新断言窗口 topmost，并在前台窗口变化时加速恢复；与 `protect keep` 独立。
+- 调整：外部关闭触发的受保护实例重启不再向新实例注入 `protect keep`；keep 和 front 均不跨重启恢复，新实例只加载 `autoexec.sct`。
+- 新增：进程退出前向插件顶层窗口广播关闭通知，定义 `SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME`、`SCT_PLUGIN_SHUTDOWN_EXIT`、`SCT_PLUGIN_SHUTDOWN_RESTART`、`SCT_PLUGIN_SHUTDOWN_SYSTEM`。
+- 文档：更新 `ADD_COMMAND.md`、`DLL.md`，补充 front、重启行为和插件关闭广播说明。

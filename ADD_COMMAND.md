@@ -337,7 +337,7 @@ std::string command_line = rest_after_first_token(context.raw_line);
 | `exit` | `commands/exit.cpp` | 无参数 | 0 |
 | `ren` | `commands/ren.cpp` | 2 个位置参数 | 0 |
 | `rm` | `commands/rm.cpp` | `-r`、`-f`、`-rf`、`--no-preserve-root`，可接收多个路径 | 0 |
-| `protect` | `commands/protect.cpp` | `ppl on [TYPE]` / `ppl off`，`keep [on|1|off|0]` | 0（`ppl` 需 Administrator） |
+| `protect` | `commands/protect.cpp` | `ppl on [TYPE]` / `ppl off`，`keep [on|1|off|0]`，`front [on|1|off|0|1ms|2..2000]` | 0（`ppl` 需 Administrator） |
 | `shell` | `commands/shell.cpp` | `-hide`/`-h`、`-c`/`-p`，后接原始命令 | 0 |
 | `start` | `commands/start.cpp` | `<program\|script\|document> [arguments...]` | 0 |
 | `taskkill` | `commands/taskkill.cpp` | `-f`、`-t`、`-im`、`-pid` | 0 |
@@ -461,6 +461,7 @@ start https://example.com/
 protect ppl on [TYPE]
 protect ppl off
 protect keep [on|1|off|0]
+protect front [on|1|off|0|1ms|2..2000]
 ```
 
 - `protect ppl` 用于管理 PPL 保护，`TYPE` 可选值为 `Authenticode`、`CodeGen`、`Antimalware`、`Lsa`、`Windows`、`WinTcb`、`WinSystem`。
@@ -472,6 +473,11 @@ protect keep [on|1|off|0]
 - `protect keep` 默认开启；`protect keep on` / `1` 开启，`protect keep off` / `0` 关闭。
 - When keep is enabled, the caption close button and Alt+F4 are blocked; an external close request such as Task Manager restarts a protected SCT instance instead of hanging, and taskkill -f is denied by the process DACL; use the exit command to quit.
 - `protect keep off` 会恢复原始进程 DACL，之后可以正常关闭。
+- `protect front` 不带参数时开启置顶保持，默认每 200ms 重新断言一次 topmost；`protect front on` / `1` 开启并沿用当前间隔，`protect front off` / `0` 关闭。
+- `protect front 1ms` 使用 1ms 间隔；`protect front 2..2000` 直接指定 2 到 2000ms 的间隔并开启。1 只作为 `on` 别名，不支持 `protect front on 100`。
+- 1ms 是请求间隔；`SetTimer` 的实际触发精度受系统计时器（通常约 10 到 16ms）和窗口消息负载影响，不能保证严格 1ms 触发。
+- front 与 keep 相互独立；front 仅 GUI 模式可用。它会在同一桌面内尽量压在其他 topmost 程序上方，但不能覆盖 UAC 安全桌面、锁屏、独占全屏或系统高优先级窗口带。
+- 外部关闭重启后，keep 和 front 都不会恢复；新实例只正常加载 `autoexec.sct`。如需保持保护，请在脚本中重新执行 `protect keep` / `protect front`。
 
 ### `taskkill`
 
@@ -779,6 +785,9 @@ static const std::vector<std::string> pins = {
 - 标题栏按客户区原点计算并裁剪绘制区域，窗口移动、最大化、缩放和 DPI 变化时按钮位置与指针命中区域保持一致；最小化、最大化/还原和关闭按钮直接处理点击，并在状态变化后重绘。
 - 右侧滚动条通过 `SetWindowTheme(output, L"", L"")` 禁用视觉主题，保持 Windows Basic/经典样式。
 - 关闭按钮、`Alt+F4`、`WM_SYSCOMMAND SC_CLOSE` 和外部 `WM_CLOSE` 都走统一关闭流程；开启 `protect keep` 时关闭按钮和 `Alt+F4` 被阻止，外部 `WM_CLOSE` 会重启受保护实例，其他情况取消命令并退出。
+- 外部关闭触发的重启只重新启动程序，不再向新实例注入 `protect keep` 或 `protect front`；新实例按正常流程加载 `autoexec.sct`。
+- 开启 `protect front` 时，窗口过程会在 `WM_WINDOWPOSCHANGING` 中强制 `HWND_TOPMOST`，并由定时器和前台窗口事件重新断言；关闭 front 时先停止状态再清除 topmost。
+- 进程退出前会向所有插件顶层窗口广播一次关闭通知；普通退出、keep 外部关闭重启和系统关机分别使用不同原因，消息名和原因定义见 `DLL.md` 7.1。
 - 窗口内部 `WM_TERMINAL_*` 消息使用启动时生成的随机令牌校验，外部进程伪造的消息会被忽略；`--sct-run-command` 只在启动新进程时生效，不会向已运行实例注入命令。
 - `--console` 模式遵循标准控制台语义；同会话进程若获得控制台输入句柄，仍可通过 `WriteConsoleInput` 注入按键，这类输入无法与真实用户输入区分。
 - 使用 `SCT64.exe --console`（x86 为 `SCT32.exe --console`）强制控制台模式；如果从已有控制台启动，会附加到父控制台，否则创建新控制台。

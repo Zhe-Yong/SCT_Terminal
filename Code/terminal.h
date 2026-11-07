@@ -13,6 +13,10 @@ public:
     void write_utf8(const char* data, size_t length);
     void clear();
     void refresh_title_bar();
+    bool set_front_enabled(bool enable, unsigned interval_ms,
+                           std::string& error);
+    bool front_enabled() const;
+    unsigned front_interval_ms() const;
 
 private:
     struct Impl;

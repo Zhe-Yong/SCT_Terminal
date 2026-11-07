@@ -266,6 +266,7 @@ struct PluginManager::Impl {
     PluginState state;
     bool initialized = false;
     bool state_ok = false;
+    std::atomic<bool> shutdown_notified{false};
     std::string state_error;
     std::map<std::string, std::shared_ptr<PluginRecord>> records;
     std::vector<std::string> order;
@@ -656,6 +657,17 @@ std::vector<PluginInfo> PluginManager::list() const {
 
 bool PluginManager::initialized() const {
     return impl_->initialized;
+}
+
+void PluginManager::notify_shutdown(unsigned reason) {
+    if (impl_->shutdown_notified.exchange(true)) return;
+
+    UINT message = RegisterWindowMessageW(SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME);
+    if (!message) return;
+    DWORD_PTR result = 0;
+    SendMessageTimeoutW(HWND_BROADCAST, message, static_cast<WPARAM>(reason),
+                        static_cast<LPARAM>(GetCurrentProcessId()),
+                        SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &result);
 }
 
 const std::string& PluginManager::state_path() const {

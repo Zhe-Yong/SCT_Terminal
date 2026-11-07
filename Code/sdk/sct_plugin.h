@@ -4,6 +4,11 @@
 
 #define SCT_PLUGIN_ABI_VERSION 1u
 
+#define SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME L"SCT.Plugin.Shutdown"
+#define SCT_PLUGIN_SHUTDOWN_EXIT 0u
+#define SCT_PLUGIN_SHUTDOWN_RESTART 1u
+#define SCT_PLUGIN_SHUTDOWN_SYSTEM 2u
+
 #if defined(_WIN32)
 #  if defined(SCT_PLUGIN_BUILD)
 #    define SCT_PLUGIN_EXPORT __declspec(dllexport)

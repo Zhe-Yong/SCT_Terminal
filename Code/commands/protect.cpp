@@ -4,7 +4,8 @@ namespace {
 
 std::string protect_usage() {
     return "Usage: protect ppl on [TYPE] | protect ppl off\n"
-           "       protect keep [on|1|off|0]\n";
+           "       protect keep [on|1|off|0]\n"
+           "       protect front [on|1|off|0|1ms|2..2000]\n";
 }
 
 bool vulnerable_driver_blocklist_enabled() {
@@ -42,6 +43,65 @@ bool parse_keep_action(const std::optional<std::string>& value,
     return false;
 }
 
+bool parse_front_number(const std::string& text, unsigned& value) {
+    if (text.empty()) return false;
+    unsigned result = 0;
+    for (char ch : text) {
+        if (ch < '0' || ch > '9') return false;
+        result = result * 10 + static_cast<unsigned>(ch - '0');
+        if (result > 2000) return false;
+    }
+    value = result;
+    return true;
+}
+
+bool parse_front_action(const std::optional<std::string>& value,
+                        bool& enable,
+                        unsigned& interval_ms,
+                        std::string& error) {
+    interval_ms = terminal().front_interval_ms();
+    if (!value) {
+        enable = true;
+        return true;
+    }
+
+    std::string action = lower_ascii(*value);
+    if (action == "on" || action == "1") {
+        enable = true;
+        return true;
+    }
+    if (action == "off" || action == "0") {
+        enable = false;
+        return true;
+    }
+
+    bool has_ms_suffix =
+        action.size() > 2 && action.compare(action.size() - 2, 2, "ms") == 0;
+    std::string number =
+        has_ms_suffix ? action.substr(0, action.size() - 2) : action;
+    unsigned parsed = 0;
+    if (parse_front_number(number, parsed)) {
+        if (has_ms_suffix) {
+            if (parsed == 0) {
+                error = "Front interval must be between 1 and 2000 ms.";
+                return false;
+            }
+        } else if (parsed == 1) {
+            enable = true;
+            return true;
+        }
+        if (parsed >= 1 && parsed <= 2000) {
+            enable = true;
+            interval_ms = parsed;
+            return true;
+        }
+    }
+
+    error = "Invalid front action: " + *value +
+            ". Use on/1/off/0, 1ms, or an interval from 2 to 2000 ms.";
+    return false;
+}
+
 int handle_keep(CommandContext& context, size_t index) {
     bool enable = true;
     std::string error;
@@ -74,6 +134,50 @@ int handle_keep(CommandContext& context, size_t index) {
     }
     print(context.out, "Keep protection disabled.\n", CLR_BrightGreen);
     terminal().refresh_title_bar();
+    return ERR_NONE;
+}
+
+int handle_front(CommandContext& context, size_t index) {
+    if (context.args.positional_count() > index + 1) {
+        print(context.out,
+              "Front protection accepts only one action or interval.\n",
+              CLR_BrightRed);
+        print(context.out, protect_usage(), CLR_BrightYellow);
+        return ERR_INVALID_OPTION;
+    }
+
+    bool enable = true;
+    unsigned interval_ms = terminal().front_interval_ms();
+    std::string error;
+    if (!parse_front_action(context.args.positional(index), enable,
+                            interval_ms, error)) {
+        print(context.out, error + "\n", CLR_BrightRed);
+        print(context.out, protect_usage(), CLR_BrightYellow);
+        return ERR_INVALID_OPTION;
+    }
+
+    if (!terminal_gui_active()) {
+        print(context.out,
+              "Front protection requires the GUI terminal.\n",
+              CLR_BrightRed);
+        return ERR_UNKNOWN;
+    }
+
+    if (!terminal().set_front_enabled(enable, interval_ms, error)) {
+        print(context.out,
+              "Failed to update front protection: " + error + "\n",
+              CLR_BrightRed);
+        return ERR_UNKNOWN;
+    }
+
+    if (enable) {
+        print(context.out,
+              "Front protection enabled: reasserting topmost every " +
+                  std::to_string(interval_ms) + " ms.\n",
+              CLR_BrightGreen);
+    } else {
+        print(context.out, "Front protection disabled.\n", CLR_BrightGreen);
+    }
     return ERR_NONE;
 }
 
@@ -194,6 +298,7 @@ int handle_protect(CommandContext& context) {
     std::string subcommand = lower_ascii(*context.args.positional(0));
     if (subcommand == "ppl") return handle_ppl(context, 1);
     if (subcommand == "keep") return handle_keep(context, 1);
+    if (subcommand == "front") return handle_front(context, 1);
 
     print(context.out, protect_usage(), CLR_BrightYellow);
     return ERR_INVALID_OPTION;
@@ -208,12 +313,14 @@ CommandSchema make_protect_schema() {
 
 const CommandRegistration register_protect_command(
     "protect",
-    "Enable PPL protection or keep-close protection for SCT.",
+    "Enable PPL, keep-close, or front-topmost protection for SCT.",
     make_protect_schema(), handle_protect, 0,
     "Usage: protect ppl on [TYPE] | protect ppl off\n"
     "       protect keep [on|1|off|0]\n"
+    "       protect front [on|1|off|0|1ms|2..2000]\n"
     "protect keep denies taskkill -f through a process DACL and blocks the "
     "close button/Alt+F4; external close requests restart a protected SCT. "
+    "protect front periodically reasserts topmost every 200 ms by default. "
     "Use the exit command to quit.");
 
 }

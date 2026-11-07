@@ -36,7 +36,7 @@
 - `plugin-state.dat` 使用 AES-256-GCM 加密并原子替换，但密钥嵌入程序，不能作为安全边界。
 - 插件以 SCT 的权限运行。不要把“能加载”误解为“已隔离”或“低权限”。
 - 应限制插件目录和 `plugin-state.dat` 的写权限；能替换 DLL 的用户可以在当前 SCT 用户权限下执行代码。
-- SCT 的 `plugin -disable` 会直接 `FreeLibrary` 卸载 DLL；当前 ABI 没有卸载回调。插件不得留下长期运行的线程、窗口、钩子、定时器或全局回调。
+- SCT 的 `plugin -disable` 会直接 `FreeLibrary` 卸载 DLL；当前 ABI 没有卸载回调。正常退出、keep 外部关闭重启或系统关机前会发送一次关闭广播（见 7.1），但广播不是卸载回调，也不保证送达。插件不得留下长期运行的线程、窗口、钩子、定时器或全局回调。
 
 ## 3. ABI 版本与必需导出
 
@@ -373,11 +373,52 @@ API 使用规则：
 - handler 在命令 worker 线程中执行。SCT 同一时间通常只执行一个命令，但插件仍应避免无保护的全局可变状态。
 - 长循环、文件遍历、等待和网络操作应定期调用 `api->is_cancelled(host)`；检测到取消后应立即返回 `SCT_ERR_CANCELLED`。
 - SCT 在用户取消后会等待约 250ms；仍未返回的 worker 线程可能被强制终止。强制终止时不会执行插件清理代码，因此不要长时间阻塞，也不要在阻塞期间持有必须释放的全局资源。
-- DLL 被 `plugin -disable` 或 SCT 退出时会 `FreeLibrary`。当前 ABI 没有 `sct_plugin_unload` 回调。
+- DLL 被 `plugin -disable` 或 SCT 退出时会 `FreeLibrary`。当前 ABI 没有 `sct_plugin_unload` 回调；正常退出、keep 外部关闭重启或系统关机前会发送关闭广播，见 7.1。
 - 不要在 `DllMain` 中调用 Host API、创建线程、加载 DLL 或执行复杂初始化。需要初始化的内容放在 `sct_plugin_register` 中。
-- 不要在插件中创建长期后台线程、窗口、钩子或定时器。若确实需要资源，必须在命令返回前释放；不要假设禁用前会收到通知。
+- 不要在插件中创建长期后台线程、窗口、钩子或定时器。若确实需要资源，必须在命令返回前释放；不要假设禁用前会收到通知。关闭广播也不能替代卸载回调。
 - 插件抛出的 C++ 异常不应穿过 C ABI。请在插件内部捕获所有异常并转换成 `SCT_ERR_*`。
 - 插件不得依赖 SCT 的未导出内部符号；只使用 `Code/sdk/sct_plugin.h` 中声明的 ABI。
+
+### 7.1 关闭广播
+
+SCT 在正常退出、keep 外部关闭重启或系统关机前，向所有顶层窗口广播一次注册消息。消息名和原因定义在 `Code/sdk/sct_plugin.h`：
+
+```c
+#define SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME L"SCT.Plugin.Shutdown"
+#define SCT_PLUGIN_SHUTDOWN_EXIT 0u
+#define SCT_PLUGIN_SHUTDOWN_RESTART 1u
+#define SCT_PLUGIN_SHUTDOWN_SYSTEM 2u
+```
+
+| 原因 | 值 | 说明 |
+| --- | --- | --- |
+| `SCT_PLUGIN_SHUTDOWN_EXIT` | 0 | 用户执行 `exit`、窗口正常关闭、autoexec 请求退出等普通退出。 |
+| `SCT_PLUGIN_SHUTDOWN_RESTART` | 1 | keep 保护下收到外部关闭请求，旧实例退出并启动新实例。 |
+| `SCT_PLUGIN_SHUTDOWN_SYSTEM` | 2 | Windows 关机或注销导致的退出。 |
+
+接收方式：
+
+```cpp
+UINT shutdown_message =
+    RegisterWindowMessageW(SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME);
+
+LRESULT CALLBACK window_proc(HWND hwnd, UINT message,
+                             WPARAM wparam, LPARAM lparam) {
+    if (message == shutdown_message) {
+        unsigned reason = static_cast<unsigned>(wparam);
+        DWORD host_pid = static_cast<DWORD>(lparam);
+        // 只做快速、非阻塞的清理标记。
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+```
+
+- 消息通过 `SendMessageTimeoutW(HWND_BROADCAST, ..., SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, ...)` 发送；`wParam` 是原因，`lParam` 是 SCT 进程 ID。
+- 插件必须拥有顶层窗口才能收到广播。`HWND_BROADCAST` 不会发送给 child 窗口或 message-only 窗口。
+- 窗口过程必须快速返回，不要调用 Host API、阻塞、弹窗或执行耗时清理。广播最多等待约 1 秒。
+- 每次进程退出最多广播一次；强制终止和崩溃不会广播。keep 保护下的外部关闭重启会先广播 `SCT_PLUGIN_SHUTDOWN_RESTART`，随后旧实例退出并启动新实例。
+- 当前 ABI 没有卸载回调，`plugin -disable` 不会广播。不要依赖关闭广播释放必须释放的资源，也不要为此创建长期线程。
 
 ## 8. 输出和 UTF-8
 
@@ -447,6 +488,7 @@ inline const std::vector<std::string>& trusted_plugin_signer_pins() {
 - [ ] 输出全部通过 `write_utf8`，长度使用字节数，并在需要时重置颜色。
 - [ ] 长操作轮询 `is_cancelled` 并返回 `SCT_ERR_CANCELLED`。
 - [ ] 没有长期后台线程、窗口、钩子或定时器，或已确保在命令返回前释放。
+- [ ] 如需接收关闭广播，已创建顶层窗口，并确保窗口过程快速返回且不调用 Host API。
 - [ ] 依赖 DLL 放在插件目录，未依赖当前工作目录。
 - [ ] 已用 `plugin -list` 检查 SHA-256、签名和加载状态。
 - [ ] 需要自动加载时已正确签名，并把 SPKI pin 加入 `plugin_trusted_signers.h`。

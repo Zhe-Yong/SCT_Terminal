@@ -19,6 +19,14 @@ constexpr unsigned kFrontDefaultIntervalMs = 200;
 constexpr unsigned kFrontMinIntervalMs = 1;
 constexpr unsigned kFrontMaxIntervalMs = 2000;
 
+constexpr wchar_t kMinimizedBarClass[] = L"SCTTerminalMinimizedBar";
+constexpr wchar_t kMinimizedBarLayoutMutex[] =
+    L"Local\\SCTMinimizedBarLayout";
+constexpr int kMinimizedBarWidth = 260;
+constexpr int kMinimizedBarHeight = 28;
+constexpr int kMinimizedBarGap = 4;
+constexpr int kMinimizedBarMargin = 4;
+
 constexpr int kDefaultFontPointSize = 12;
 constexpr int kMinFontPointSize = 6;
 constexpr int kMaxFontPointSize = 32;
@@ -67,6 +75,29 @@ struct FrontRequest {
     bool ok = false;
     std::string error;
 };
+
+struct MinimizedBarEntry {
+    HWND hwnd = nullptr;
+    RECT rect{};
+};
+
+BOOL CALLBACK enum_minimized_bars(HWND hwnd, LPARAM lparam) {
+    wchar_t class_name[64]{};
+    if (!GetClassNameW(hwnd, class_name,
+                       static_cast<int>(std::size(class_name))) ||
+        lstrcmpW(class_name, kMinimizedBarClass) != 0 ||
+        !IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+
+    auto* entries =
+        reinterpret_cast<std::vector<MinimizedBarEntry>*>(lparam);
+    RECT rect{};
+    if (GetWindowRect(hwnd, &rect)) {
+        entries->push_back({hwnd, rect});
+    }
+    return TRUE;
+}
 
 COLORREF ansi_color(int code, bool background) {
     switch (code) {
@@ -121,6 +152,36 @@ COLORREF ansi_color(int code, bool background) {
         default:
             return background ? RGB(12, 12, 12) : RGB(220, 220, 220);
     }
+}
+
+size_t text_unit_length(const std::wstring& text, size_t index) {
+    if (index + 1 < text.size()) {
+        wchar_t high = text[index];
+        wchar_t low = text[index + 1];
+        if (high >= 0xD800 && high <= 0xDBFF && low >= 0xDC00 &&
+            low <= 0xDFFF) {
+            return 2;
+        }
+    }
+    return 1;
+}
+
+bool is_cjk_at(const std::wstring& text, size_t index) {
+    wchar_t ch = text[index];
+    if (ch >= 0xD800 && ch <= 0xDBFF) {
+        return ch >= 0xD840 && ch <= 0xD87F;
+    }
+    unsigned int codepoint = static_cast<unsigned int>(ch);
+    return (codepoint >= 0x2E80 && codepoint <= 0x2FFF) ||
+           (codepoint >= 0x3000 && codepoint <= 0x303F) ||
+           (codepoint >= 0x3040 && codepoint <= 0x30FF) ||
+           (codepoint >= 0x3100 && codepoint <= 0x312F) ||
+           (codepoint >= 0x31A0 && codepoint <= 0x31BF) ||
+           (codepoint >= 0x31F0 && codepoint <= 0x31FF) ||
+           (codepoint >= 0x3400 && codepoint <= 0x4DBF) ||
+           (codepoint >= 0x4E00 && codepoint <= 0x9FFF) ||
+           (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||
+           (codepoint >= 0xFF00 && codepoint <= 0xFFEF);
 }
 
 class AnsiParser {
@@ -357,6 +418,8 @@ struct Terminal::Impl {
     UINT_PTR front_timer = 0;
     HWINEVENTHOOK front_event_hook = nullptr;
     bool front_raise_to_top = false;
+    HWND minimized_bar = nullptr;
+    int dpi = 96;
     std::mutex mutex;
     std::condition_variable condition;
     std::string pending_line;
@@ -403,6 +466,7 @@ struct Terminal::Impl {
     void clear_input();
     void interrupt_input();
     void replace_input(const std::wstring& text);
+    void format_input_text();
     void history_move(int direction);
     void drain();
     void close_window(bool external);
@@ -412,7 +476,12 @@ struct Terminal::Impl {
     bool apply_front(bool enable, unsigned interval_ms, std::string& error);
     void reassert_topmost();
     void cleanup_front();
+    void minimize_to_bar();
+    void restore_from_bar();
+    void destroy_minimized_bar();
+    void layout_minimized_bars();
     void append_run(const TerminalRun& run);
+    void apply_line_spacing();
     void set_font_point_size(int point_size);
     void zoom_from_wheel(int delta);
 
@@ -420,6 +489,8 @@ struct Terminal::Impl {
                                         WPARAM wparam, LPARAM lparam);
     static LRESULT CALLBACK editor_proc(HWND hwnd, UINT message,
                                         WPARAM wparam, LPARAM lparam);
+    static LRESULT CALLBACK minimized_bar_proc(HWND hwnd, UINT message,
+                                               WPARAM wparam, LPARAM lparam);
     static void CALLBACK front_event_proc(HWINEVENTHOOK hook, DWORD event,
                                           HWND hwnd, LONG id_object,
                                           LONG id_child, DWORD thread_id,
@@ -626,7 +697,7 @@ bool Terminal::Impl::create_window(std::string& error) {
     HINSTANCE instance = GetModuleHandleW(nullptr);
     background = CreateSolidBrush(RGB(12, 12, 12));
     HDC screen = GetDC(nullptr);
-    int dpi = screen ? GetDeviceCaps(screen, LOGPIXELSY) : 96;
+    dpi = screen ? GetDeviceCaps(screen, LOGPIXELSY) : 96;
     if (screen) ReleaseDC(nullptr, screen);
     font = CreateFontW(-MulDiv(font_point_size, dpi, 72), 0, 0, 0, FW_NORMAL,
                        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -653,6 +724,22 @@ bool Terminal::Impl::create_window(std::string& error) {
     if (!RegisterClassExW(&window_class) &&
         GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         error = "Failed to register terminal window class.";
+        return false;
+    }
+
+    WNDCLASSEXW bar_class{};
+    bar_class.cbSize = sizeof(bar_class);
+    bar_class.style = CS_DBLCLKS;
+    bar_class.lpfnWndProc = &Terminal::Impl::minimized_bar_proc;
+    bar_class.hInstance = instance;
+    bar_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    bar_class.hIcon = icon;
+    bar_class.hIconSm = small_icon;
+    bar_class.hbrBackground = background;
+    bar_class.lpszClassName = kMinimizedBarClass;
+    if (!RegisterClassExW(&bar_class) &&
+        GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        error = "Failed to register minimized bar window class.";
         return false;
     }
 
@@ -691,6 +778,7 @@ bool Terminal::Impl::create_window(std::string& error) {
     wcscpy_s(format.szFaceName, L"Consolas");
     SendMessageW(output, EM_SETCHARFORMAT, SCF_DEFAULT,
                  reinterpret_cast<LPARAM>(&format));
+    apply_line_spacing();
 
     SetWindowLongPtrW(output, GWLP_USERDATA,
                       reinterpret_cast<LONG_PTR>(this));
@@ -962,7 +1050,57 @@ void Terminal::Impl::replace_input(const std::wstring& text) {
                  reinterpret_cast<LPARAM>(&range));
     SendMessageW(output, EM_REPLACESEL, FALSE,
                  reinterpret_cast<LPARAM>(text.c_str()));
+    format_input_text();
     move_caret_to_end();
+}
+
+void Terminal::Impl::format_input_text() {
+    if (!output || !input_active) return;
+    int end = text_end();
+    if (end <= input_start) return;
+
+    std::wstring text(static_cast<size_t>(end - input_start), L'\0');
+    TEXTRANGEW range{};
+    range.chrg.cpMin = input_start;
+    range.chrg.cpMax = end;
+    range.lpstrText = text.data();
+    SendMessageW(output, EM_GETTEXTRANGE, 0,
+                 reinterpret_cast<LPARAM>(&range));
+    text.resize(std::wcslen(text.c_str()));
+    if (text.empty()) return;
+
+    CHARRANGE saved{};
+    SendMessageW(output, EM_EXGETSEL, 0,
+                 reinterpret_cast<LPARAM>(&saved));
+
+    CHARFORMAT2W format{};
+    format.cbSize = sizeof(format);
+    format.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
+
+    size_t offset = 0;
+    while (offset < text.size()) {
+        bool cjk = is_cjk_at(text, offset);
+        size_t next = offset + text_unit_length(text, offset);
+        while (next < text.size() && is_cjk_at(text, next) == cjk) {
+            next += text_unit_length(text, next);
+        }
+
+        CHARRANGE selection{input_start + static_cast<int>(offset),
+                            input_start + static_cast<int>(next)};
+        SendMessageW(output, EM_EXSETSEL, 0,
+                     reinterpret_cast<LPARAM>(&selection));
+        format.yHeight = cjk ? font_point_size * 20 * 7 / 8
+                             : font_point_size * 20;
+        format.bCharSet = cjk ? GB2312_CHARSET : DEFAULT_CHARSET;
+        wcscpy_s(format.szFaceName, cjk ? L"NSimSun" : L"Consolas");
+        SendMessageW(output, EM_SETCHARFORMAT, SCF_SELECTION,
+                     reinterpret_cast<LPARAM>(&format));
+
+        offset = next;
+    }
+
+    SendMessageW(output, EM_EXSETSEL, 0,
+                 reinterpret_cast<LPARAM>(&saved));
 }
 
 void Terminal::Impl::history_move(int direction) {
@@ -995,6 +1133,7 @@ void Terminal::Impl::drain() {
     if (clear_output) {
         SetWindowTextW(output, L"");
         input_start = 0;
+        apply_line_spacing();
     }
     if (runs.empty()) return;
 
@@ -1003,6 +1142,53 @@ void Terminal::Impl::drain() {
     SendMessageW(output, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(output, nullptr, TRUE);
     move_caret_to_end();
+    apply_line_spacing();
+}
+
+void Terminal::Impl::apply_line_spacing() {
+    if (!output) return;
+
+    int line_height = 0;
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (dc) {
+        HFONT measure_font = CreateFontW(
+            -MulDiv(font_point_size, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE,
+            FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+            L"Consolas");
+        if (measure_font) {
+            HFONT old_font =
+                reinterpret_cast<HFONT>(SelectObject(dc, measure_font));
+            TEXTMETRICW metrics{};
+            if (GetTextMetricsW(dc, &metrics)) {
+                line_height =
+                    metrics.tmHeight + metrics.tmExternalLeading;
+            }
+            SelectObject(dc, old_font);
+            DeleteObject(measure_font);
+        }
+        DeleteDC(dc);
+    }
+    if (line_height <= 0) {
+        line_height = MulDiv(font_point_size, dpi, 72);
+    }
+
+    PARAFORMAT2 format{};
+    format.cbSize = sizeof(format);
+    format.dwMask = PFM_LINESPACING;
+    format.bLineSpacingRule = 3;
+    format.dyLineSpacing = MulDiv(line_height, 1440, dpi > 0 ? dpi : 96);
+
+    CHARRANGE selection{};
+    SendMessageW(output, EM_EXGETSEL, 0,
+                 reinterpret_cast<LPARAM>(&selection));
+    CHARRANGE all{0, -1};
+    SendMessageW(output, EM_EXSETSEL, 0,
+                 reinterpret_cast<LPARAM>(&all));
+    SendMessageW(output, EM_SETPARAFORMAT, 0,
+                 reinterpret_cast<LPARAM>(&format));
+    SendMessageW(output, EM_EXSETSEL, 0,
+                 reinterpret_cast<LPARAM>(&selection));
 }
 
 void Terminal::Impl::append_run(const TerminalRun& run) {
@@ -1022,19 +1208,6 @@ void Terminal::Impl::append_run(const TerminalRun& run) {
     std::wstring text = utf8_to_wide(run.text);
     if (text.empty()) return;
 
-    int start = text_end();
-    CHARRANGE selection{start, start};
-    SendMessageW(output, EM_EXSETSEL, 0,
-                 reinterpret_cast<LPARAM>(&selection));
-    SendMessageW(output, EM_REPLACESEL, FALSE,
-                 reinterpret_cast<LPARAM>(text.c_str()));
-    int end = text_end();
-
-    selection.cpMin = start;
-    selection.cpMax = end;
-    SendMessageW(output, EM_EXSETSEL, 0,
-                 reinterpret_cast<LPARAM>(&selection));
-
     int foreground = run.fg;
     int background = run.bg;
     if ((run.style & kStyleReverse) != 0) {
@@ -1048,21 +1221,48 @@ void Terminal::Impl::append_run(const TerminalRun& run) {
                     CFM_CHARSET;
     format.crTextColor = ansi_color(foreground, false);
     format.crBackColor = ansi_color(background, true);
-    format.yHeight = font_point_size * 20;
-    format.bCharSet = DEFAULT_CHARSET;
-    wcscpy_s(format.szFaceName, L"Consolas");
     format.dwEffects = 0;
     if ((run.style & kStyleBold) != 0) format.dwEffects |= CFE_BOLD;
     if ((run.style & kStyleItalic) != 0) format.dwEffects |= CFE_ITALIC;
     if ((run.style & kStyleUnderline) != 0) format.dwEffects |= CFE_UNDERLINE;
     if ((run.style & kStyleStrike) != 0) format.dwEffects |= CFE_STRIKEOUT;
-    SendMessageW(output, EM_SETCHARFORMAT, SCF_SELECTION,
-                 reinterpret_cast<LPARAM>(&format));
 
-    selection.cpMin = end;
-    selection.cpMax = end;
+    size_t offset = 0;
+    while (offset < text.size()) {
+        bool cjk = is_cjk_at(text, offset);
+        size_t next = offset + text_unit_length(text, offset);
+        while (next < text.size() && is_cjk_at(text, next) == cjk) {
+            next += text_unit_length(text, next);
+        }
+
+        std::wstring segment = text.substr(offset, next - offset);
+        int segment_start = text_end();
+        CHARRANGE selection{segment_start, segment_start};
+        SendMessageW(output, EM_EXSETSEL, 0,
+                     reinterpret_cast<LPARAM>(&selection));
+        SendMessageW(output, EM_REPLACESEL, FALSE,
+                     reinterpret_cast<LPARAM>(segment.c_str()));
+        int segment_end = text_end();
+
+        selection.cpMin = segment_start;
+        selection.cpMax = segment_end;
+        SendMessageW(output, EM_EXSETSEL, 0,
+                     reinterpret_cast<LPARAM>(&selection));
+
+        format.yHeight = cjk ? font_point_size * 20 * 7 / 8
+                             : font_point_size * 20;
+        format.bCharSet = cjk ? GB2312_CHARSET : DEFAULT_CHARSET;
+        wcscpy_s(format.szFaceName, cjk ? L"NSimSun" : L"Consolas");
+        SendMessageW(output, EM_SETCHARFORMAT, SCF_SELECTION,
+                     reinterpret_cast<LPARAM>(&format));
+
+        offset = next;
+    }
+
+    int end = text_end();
+    CHARRANGE caret{end, end};
     SendMessageW(output, EM_EXSETSEL, 0,
-                 reinterpret_cast<LPARAM>(&selection));
+                 reinterpret_cast<LPARAM>(&caret));
 }
 
 void Terminal::Impl::set_font_point_size(int point_size) {
@@ -1092,6 +1292,7 @@ void Terminal::Impl::set_font_point_size(int point_size) {
                  reinterpret_cast<LPARAM>(&format));
     SendMessageW(output, EM_EXSETSEL, 0,
                  reinterpret_cast<LPARAM>(&selection));
+    apply_line_spacing();
     SendMessageW(output, EM_SETSCROLLPOS, 0,
                  reinterpret_cast<LPARAM>(&scroll));
     SendMessageW(output, WM_SETREDRAW, TRUE, 0);
@@ -1190,6 +1391,11 @@ bool Terminal::Impl::apply_front(bool enable, unsigned interval_ms,
     }
     if (front_event_owner.load() == this) front_event_owner.store(nullptr);
 
+    if (minimized_bar) {
+        SetWindowPos(minimized_bar, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                         SWP_NOOWNERZORDER);
+    }
     if (!SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
                           SWP_NOOWNERZORDER)) {
@@ -1203,8 +1409,11 @@ bool Terminal::Impl::apply_front(bool enable, unsigned interval_ms,
 
 void Terminal::Impl::reassert_topmost() {
     if (!hwnd || !front_enabled.load()) return;
-    front_raise_to_top = true;
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+    HWND target =
+        (minimized_bar && IsWindowVisible(minimized_bar)) ? minimized_bar
+                                                          : hwnd;
+    front_raise_to_top = target == hwnd;
+    SetWindowPos(target, HWND_TOP, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
                      SWP_NOOWNERZORDER);
     front_raise_to_top = false;
@@ -1212,6 +1421,11 @@ void Terminal::Impl::reassert_topmost() {
         SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
                          SWP_NOOWNERZORDER);
+        if (minimized_bar) {
+            SetWindowPos(minimized_bar, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                             SWP_NOOWNERZORDER);
+        }
     }
 }
 
@@ -1226,6 +1440,108 @@ void Terminal::Impl::cleanup_front() {
         front_event_hook = nullptr;
     }
     if (front_event_owner.load() == this) front_event_owner.store(nullptr);
+    destroy_minimized_bar();
+}
+
+void Terminal::Impl::minimize_to_bar() {
+    if (!hwnd || minimized_bar) return;
+    if (!front_enabled.load()) {
+        ShowWindow(hwnd, SW_MINIMIZE);
+        return;
+    }
+
+    RECT work{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    int width = MulDiv(kMinimizedBarWidth, dpi, 96);
+    int height = MulDiv(kMinimizedBarHeight, dpi, 96);
+    wchar_t title[512]{};
+    GetWindowTextW(hwnd, title, static_cast<int>(std::size(title)));
+
+    HWND bar = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kMinimizedBarClass, title,
+        WS_POPUP | WS_BORDER, work.right + 1000, work.bottom - height,
+        width, height, nullptr, nullptr, GetModuleHandleW(nullptr), this);
+    if (!bar) {
+        ShowWindow(hwnd, SW_MINIMIZE);
+        return;
+    }
+
+    minimized_bar = bar;
+    ShowWindow(hwnd, SW_HIDE);
+    ShowWindow(bar, SW_SHOWNOACTIVATE);
+    layout_minimized_bars();
+    reassert_topmost();
+}
+
+void Terminal::Impl::restore_from_bar() {
+    if (!minimized_bar || !hwnd) return;
+
+    HWND bar = minimized_bar;
+    minimized_bar = nullptr;
+    ShowWindow(bar, SW_HIDE);
+    layout_minimized_bars();
+    DestroyWindow(bar);
+
+    ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+    if (output) SetFocus(output);
+    reassert_topmost();
+}
+
+void Terminal::Impl::destroy_minimized_bar() {
+    if (!minimized_bar) return;
+
+    HWND bar = minimized_bar;
+    minimized_bar = nullptr;
+    DestroyWindow(bar);
+    layout_minimized_bars();
+}
+
+void Terminal::Impl::layout_minimized_bars() {
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, kMinimizedBarLayoutMutex);
+    bool locked = mutex &&
+                  WaitForSingleObject(mutex, 1000) == WAIT_OBJECT_0;
+    if (mutex && !locked) {
+        CloseHandle(mutex);
+        return;
+    }
+
+    std::vector<MinimizedBarEntry> entries;
+    EnumWindows(&enum_minimized_bars,
+                reinterpret_cast<LPARAM>(&entries));
+    std::sort(entries.begin(), entries.end(),
+              [](const MinimizedBarEntry& first,
+                 const MinimizedBarEntry& second) {
+                  if (first.rect.top != second.rect.top) {
+                      return first.rect.top > second.rect.top;
+                  }
+                  if (first.rect.left != second.rect.left) {
+                      return first.rect.left < second.rect.left;
+                  }
+                  return first.hwnd < second.hwnd;
+              });
+
+    RECT work{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    int width = MulDiv(kMinimizedBarWidth, dpi, 96);
+    int height = MulDiv(kMinimizedBarHeight, dpi, 96);
+    int gap = MulDiv(kMinimizedBarGap, dpi, 96);
+    int margin = MulDiv(kMinimizedBarMargin, dpi, 96);
+    int x = work.left + margin;
+    int y = work.bottom - margin - height;
+
+    for (const MinimizedBarEntry& entry : entries) {
+        if (x + width > work.right - margin && x > work.left + margin) {
+            x = work.left + margin;
+            y -= height + gap;
+        }
+        SetWindowPos(entry.hwnd, HWND_TOPMOST, x, y, width, height,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        x += width + gap;
+    }
+
+    if (locked) ReleaseMutex(mutex);
+    if (mutex) CloseHandle(mutex);
 }
 
 void CALLBACK Terminal::Impl::front_event_proc(HWINEVENTHOOK hook,
@@ -1328,6 +1644,7 @@ void Terminal::Impl::close_window(bool external) {
     request_command_cancel();
     shutting_down.store(true);
     condition.notify_all();
+    destroy_minimized_bar();
     DestroyWindow(hwnd);
 }
 
@@ -1373,6 +1690,11 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             }
             break;
         case WM_SYSCOMMAND:
+            if (self && (wparam & 0xFFF0) == SC_MINIMIZE &&
+                self->front_enabled.load()) {
+                self->minimize_to_bar();
+                return 0;
+            }
             if (self && (wparam & 0xFFF0) == SC_CLOSE) {
                 self->close_window(false);
                 return 0;
@@ -1436,7 +1758,11 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             if (self) {
                 if (wparam == HTMINBUTTON) {
                     self->caption_hot = -1;
-                    ShowWindow(hwnd, SW_MINIMIZE);
+                    if (self->front_enabled.load()) {
+                        self->minimize_to_bar();
+                    } else {
+                        ShowWindow(hwnd, SW_MINIMIZE);
+                    }
                     return 0;
                 }
                 if (wparam == HTMAXBUTTON) {
@@ -1511,6 +1837,7 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
             if (self && wparam == self->message_token) {
                 SetWindowTextW(self->output, L"");
                 self->input_start = 0;
+                self->apply_line_spacing();
                 InvalidateRect(self->output, nullptr, TRUE);
             }
             return 0;
@@ -1542,6 +1869,99 @@ LRESULT CALLBACK Terminal::Impl::window_proc(HWND hwnd, UINT message,
                 self->zoom_from_wheel(GET_WHEEL_DELTA_WPARAM(wparam));
                 return 0;
             }
+            break;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+LRESULT CALLBACK Terminal::Impl::minimized_bar_proc(HWND hwnd,
+                                                    UINT message,
+                                                    WPARAM wparam,
+                                                    LPARAM lparam) {
+    Impl* self = reinterpret_cast<Impl*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+        self = static_cast<Impl*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(self));
+    }
+
+    switch (message) {
+        case WM_WINDOWPOSCHANGING:
+            if (self && self->front_enabled.load()) {
+                auto* position = reinterpret_cast<WINDOWPOS*>(lparam);
+                position->hwndInsertAfter = HWND_TOPMOST;
+                position->flags &= ~SWP_NOZORDER;
+            }
+            break;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            fill_caption_gradient(
+                dc, client, GetSysColor(COLOR_GRADIENTINACTIVECAPTION),
+                GetSysColor(COLOR_INACTIVECAPTION));
+
+            HICON icon = nullptr;
+            if (self && self->hwnd) {
+                icon = reinterpret_cast<HICON>(
+                    GetClassLongPtrW(self->hwnd, GCLP_HICONSM));
+                if (!icon) {
+                    icon = reinterpret_cast<HICON>(
+                        GetClassLongPtrW(self->hwnd, GCLP_HICON));
+                }
+            }
+            RECT text_rect = client;
+            if (icon) {
+                int icon_width = GetSystemMetrics(SM_CXSMICON);
+                int icon_height = GetSystemMetrics(SM_CYSMICON);
+                int icon_x = client.left + 6;
+                int icon_y =
+                    client.top + (client.bottom - client.top - icon_height) / 2;
+                DrawIconEx(dc, icon_x, icon_y, icon, icon_width, icon_height,
+                           0, nullptr, DI_NORMAL);
+                text_rect.left = icon_x + icon_width + 6;
+            } else {
+                text_rect.left += 6;
+            }
+            text_rect.right -= 6;
+
+            wchar_t title[512]{};
+            int length = GetWindowTextW(hwnd, title,
+                                        static_cast<int>(std::size(title)));
+            if (length > 0 && text_rect.right > text_rect.left) {
+                int old_mode = SetBkMode(dc, TRANSPARENT);
+                COLORREF old_color = SetTextColor(
+                    dc, GetSysColor(COLOR_INACTIVECAPTIONTEXT));
+                HFONT old_font = reinterpret_cast<HFONT>(
+                    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT)));
+                DrawTextW(dc, title, length, &text_rect,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE |
+                              DT_END_ELLIPSIS | DT_NOPREFIX);
+                SelectObject(dc, old_font);
+                SetTextColor(dc, old_color);
+                SetBkMode(dc, old_mode);
+            }
+
+            DrawEdge(dc, &client, EDGE_RAISED, BF_RECT);
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        case WM_SETCURSOR:
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));
+            return TRUE;
+        case WM_LBUTTONUP:
+        case WM_LBUTTONDBLCLK:
+            if (self) self->restore_from_bar();
+            return 0;
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             break;
         default:
             break;
@@ -1690,8 +2110,15 @@ LRESULT CALLBACK Terminal::Impl::editor_proc(HWND hwnd, UINT message,
         }
 
         if (self->editor_old_proc) {
-            return CallWindowProcW(self->editor_old_proc, hwnd, message,
-                                   wparam, lparam);
+            LRESULT result = CallWindowProcW(self->editor_old_proc, hwnd,
+                                             message, wparam, lparam);
+            if (message == WM_CHAR || message == WM_PASTE ||
+                message == WM_IME_CHAR ||
+                (message == WM_IME_COMPOSITION &&
+                 (lparam & GCS_RESULTSTR) != 0)) {
+                self->format_input_text();
+            }
+            return result;
         }
     }
 

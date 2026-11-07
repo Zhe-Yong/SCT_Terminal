@@ -47,3 +47,7 @@
 - 调整：外部关闭触发的受保护实例重启不再向新实例注入 `protect keep`；keep 和 front 均不跨重启恢复，新实例只加载 `autoexec.sct`。
 - 新增：进程退出前向插件顶层窗口广播关闭通知，定义 `SCT_PLUGIN_SHUTDOWN_MESSAGE_NAME`、`SCT_PLUGIN_SHUTDOWN_EXIT`、`SCT_PLUGIN_SHUTDOWN_RESTART`、`SCT_PLUGIN_SHUTDOWN_SYSTEM`。
 - 文档：更新 `ADD_COMMAND.md`、`DLL.md`，补充 front、重启行为和插件关闭广播说明。
+
+## 2026.11.07
+- 新增：开启 `protect front` 时最小化不进入任务栏，改为隐藏主窗口并在工作区左下角显示置顶最小化条；多个实例依次排列，点击或双击恢复，关闭 front 后恢复系统默认最小化。
+- 修复：含中文的 RichEdit 行行距大于英文行；中文段使用 `NSimSun` 按比例缩小字号，保持与英文 `Consolas` 相同行高，输入行的中文同样处理。

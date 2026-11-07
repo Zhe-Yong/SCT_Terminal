@@ -63,6 +63,9 @@ static void print_welcome() {
           CLR_White, CLR_BgBlue, CLR_Bold);
     print_rst();
 
+    print("Warning: This application may harm your system!\nUse at your own risk.\n",
+        CLR_Yellow, CLR_BgBlack, CLR_Bold);
+
     if (get_process_privilege_level() == PrivilegeLevel::User) {
         print("Running under non administrator privileges\n",
               CLR_Black, CLR_BgWhite);

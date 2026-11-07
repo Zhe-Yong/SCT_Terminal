@@ -787,6 +787,8 @@ static const std::vector<std::string> pins = {
 - 关闭按钮、`Alt+F4`、`WM_SYSCOMMAND SC_CLOSE` 和外部 `WM_CLOSE` 都走统一关闭流程；开启 `protect keep` 时关闭按钮和 `Alt+F4` 被阻止，外部 `WM_CLOSE` 会重启受保护实例，其他情况取消命令并退出。
 - 外部关闭触发的重启只重新启动程序，不再向新实例注入 `protect keep` 或 `protect front`；新实例按正常流程加载 `autoexec.sct`。
 - 开启 `protect front` 时，窗口过程会在 `WM_WINDOWPOSCHANGING` 中强制 `HWND_TOPMOST`，并由定时器和前台窗口事件重新断言；关闭 front 时先停止状态再清除 topmost。
+- 开启 `protect front` 时最小化不进入任务栏：主窗口隐藏，在工作区左下角显示置顶的 `SCTTerminalMinimizedBar` 工具窗口；多个实例依次排列，点击或双击最小化条恢复窗口。关闭 front 后恢复系统默认最小化。
+- 含中文的 RichEdit 行使用 `NSimSun` 并按比例缩小字号，使中英文行距保持一致；当前输入行的中文也使用相同格式。
 - 进程退出前会向所有插件顶层窗口广播一次关闭通知；普通退出、keep 外部关闭重启和系统关机分别使用不同原因，消息名和原因定义见 `DLL.md` 7.1。
 - 窗口内部 `WM_TERMINAL_*` 消息使用启动时生成的随机令牌校验，外部进程伪造的消息会被忽略；`--sct-run-command` 只在启动新进程时生效，不会向已运行实例注入命令。
 - `--console` 模式遵循标准控制台语义；同会话进程若获得控制台输入句柄，仍可通过 `WriteConsoleInput` 注入按键，这类输入无法与真实用户输入区分。
